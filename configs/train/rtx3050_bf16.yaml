@@ -1,0 +1,68 @@
+# Training profile tuned for RTX 3050 (Ampere, 4GB VRAM).
+# - bf16-mixed: Ampere supports BF16 natively; safer than FP16 for losses with squared terms.
+# - tiny effective batch via accumulation if VRAM is tight.
+# - torch.compile enabled in train, disabled around ONNX export (handled in code).
+
+max_epochs: 60
+precision: bf16-mixed
+accumulate_grad_batches: 2
+gradient_clip_val: 1.0
+gradient_clip_algorithm: norm
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.OneCycleLR
+  max_lr: 3.0e-4
+  pct_start: 0.1
+  anneal_strategy: cos
+  div_factor: 25.0
+  final_div_factor: 1.0e4
+
+loss:
+  _target_: aquaclr.losses.physics_loss.PhysicsInformedLoss
+  lambda_recon: 1.0
+  lambda_phys: 0.5
+  lambda_ssim: 0.5
+  lambda_tv: 1.0e-2
+  lambda_t: 0.5            # used only when t_gt is present
+  charbonnier: true
+  ssim_window: 11
+
+callbacks:
+  early_stopping:
+    monitor: val/psnr
+    mode: max
+    patience: 12
+  checkpoint:
+    monitor: val/psnr
+    mode: max
+    save_top_k: 3
+    save_last: true
+  ema:
+    enabled: true
+    decay: 0.9995
+  vram_monitor:
+    enabled: true
+    every_n_steps: 50
+  sample_logger:
+    every_n_steps: 200
+    n_samples: 4
+
+trainer:
+  log_every_n_steps: 25
+  val_check_interval: 1.0
+  num_sanity_val_steps: 2
+  benchmark: false
+  deterministic: warn
+  enable_model_summary: true
+  enable_progress_bar: true
+
+compile:
+  enabled: true
+  mode: reduce-overhead   # safe default for small models on Ampere
+  fullgraph: false

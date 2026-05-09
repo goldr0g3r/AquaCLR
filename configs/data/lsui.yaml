@@ -1,0 +1,15 @@
+# LSUI (Large-Scale Underwater Image) — Peng et al., 2021 (U-shape Transformer).
+# 4,279 paired underwater images with reference enhanced GT and medium
+# transmission maps — the latter is RARE and enables direct supervision on t(x).
+_target_: aquaclr.data.lsui_dataset.LSUIDataModule
+
+root: ${paths.data_root}/lsui
+image_size: 256
+batch_size: 8
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+val_fraction: 0.1
+augment: true
+load_transmission_gt: true   # if true, batch yields t_gt for direct supervision
+download: false

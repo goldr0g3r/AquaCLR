@@ -1,0 +1,15 @@
+# Marine Snow Removal Benchmark (MSRB) — Sato et al., APSIPA 2023.
+# Paper: arXiv 2103.14249. Repo: https://github.com/ychtanaka/marine-snow
+# 2,300 train / 400 test paired (snowy I, clean J) at 384x384.
+_target_: aquaclr.data.msrb_dataset.MSRBDataModule
+
+root: ${paths.data_root}/msrb
+task: 1                # 1 = small particles, 2 = mixed sizes
+image_size: 256        # crop size during training (full res = 384)
+batch_size: 16         # auto-tuned at runtime if VRAM permits
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+val_fraction: 0.1      # carve a val split out of the official train set
+augment: true
+download: false        # set true on first run to fetch + verify md5

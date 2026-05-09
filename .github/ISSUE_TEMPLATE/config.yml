@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / discussion
+    url: https://github.com/goldr0g3r/aquaclr/discussions
+    about: For open-ended questions, ask in Discussions instead of filing an issue.

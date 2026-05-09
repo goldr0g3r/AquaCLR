@@ -1,0 +1,38 @@
+# Top-level Hydra config for AquaCLR.
+# Compose model + data + train. Override with CLI:
+#   python scripts/train.py model=legion_desnow_s data=combined train=rtx3050_bf16
+defaults:
+  - _self_
+  - model: legion_desnow_s
+  - data: combined
+  - train: rtx3050_bf16
+
+project_name: AquaCLR-LEGION-M1
+run_name: ${now:%Y%m%d-%H%M%S}
+seed: 1337
+deterministic: true
+
+paths:
+  data_root: ${oc.env:AQUACLR_DATA_ROOT, data}
+  output_root: ${oc.env:AQUACLR_OUTPUT_ROOT, outputs}
+  ckpt_dir: ${paths.output_root}/${run_name}/ckpts
+  log_dir: ${paths.output_root}/${run_name}/logs
+
+logging:
+  # primary: weights-and-biases. fallback: tensorboard if WANDB_DISABLED is set.
+  wandb:
+    enabled: ${oc.env:AQUACLR_WANDB, true}
+    project: ${project_name}
+    entity: null
+    tags: ["m1", "desnow"]
+  tensorboard:
+    enabled: true
+
+hydra:
+  run:
+    dir: ${paths.output_root}/${run_name}
+  sweep:
+    dir: ${paths.output_root}/sweeps/${run_name}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

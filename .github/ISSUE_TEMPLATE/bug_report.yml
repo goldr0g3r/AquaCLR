@@ -1,0 +1,82 @@
+name: Bug report
+description: Something is broken or behaves incorrectly.
+title: "bug: <short summary>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in as much of
+        the form as you can — it dramatically shortens the triage loop.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of what the bug is.
+      placeholder: "PhysicsInformedLoss returns NaN when t collapses to 0 ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, runnable repro. Paste a Python snippet or the exact CLI invocation.
+      placeholder: |
+        ```python
+        from aquaclr.models import LEGIONDeSnowNet
+        ...
+        ```
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Include the full traceback if any.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: aquaclr-version
+    attributes:
+      label: AquaCLR version / commit
+      placeholder: "0.1.0 or commit sha"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+    validations:
+      required: true
+  - type: input
+    id: torch-version
+    attributes:
+      label: PyTorch + CUDA versions
+      description: Output of `python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`
+      placeholder: "2.5.1 12.4 True"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / GPU
+      placeholder: "Windows 11, RTX 3050 4GB"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that might help — config diff, screenshots, sample inputs.
+    validations:
+      required: false

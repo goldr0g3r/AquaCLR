@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "feat: <short summary>"
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve? Be concrete; link papers if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the feature, expected interface, and rough sketch of where it slots into the codebase.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you consider? Why is this the best path?
+    validations:
+      required: false
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Roadmap scope
+      description: Where does this fit on the milestone roadmap?
+      options:
+        - "M1 — model / loss / training pipeline"
+        - "M1.5 — TensorRT / ROS 2 deployment"
+        - "M2 — temporal / INT8 / sea-trial"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+    validations:
+      required: false

@@ -1,0 +1,12 @@
+# LEGION-DeSnow-S — small variant, fits in RTX 3050 4GB at 384x384 with bf16.
+_target_: aquaclr.models.model.LEGIONDeSnowNet
+
+backbone: mobilenet_v3_small
+pretrained: true                 # ImageNet weights from torchvision
+out_indices: [0, 1, 2, 3]        # encoder feature stages we tap
+decoder_channels: [96, 64, 32, 16]
+backscatter_hidden: 32
+use_depthwise: true              # Depthwise-separable conv for VRAM savings
+use_channels_last: true          # Speedup on Ampere+
+eps: 1.0e-3                      # transmission floor for stable physics inversion
+freeze_backbone_epochs: 2        # warmup on heads only

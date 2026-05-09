@@ -1,0 +1,26 @@
+# MSRB + LSUI combined sampler. MSRB drives the marine-snow signal,
+# LSUI adds physics-grade transmission supervision.
+_target_: aquaclr.data.combined_datamodule.CombinedDataModule
+
+msrb:
+  _target_: aquaclr.data.msrb_dataset.MSRBDataModule
+  root: ${paths.data_root}/msrb
+  task: 1
+  image_size: 256
+  batch_size: 8
+  num_workers: 4
+  augment: true
+  download: false
+
+lsui:
+  _target_: aquaclr.data.lsui_dataset.LSUIDataModule
+  root: ${paths.data_root}/lsui
+  image_size: 256
+  batch_size: 4
+  num_workers: 4
+  augment: true
+  load_transmission_gt: true
+  download: false
+
+mix_ratio: [0.7, 0.3]   # P(sample from MSRB), P(sample from LSUI)
+val_use: msrb           # use MSRB val split for primary metrics
