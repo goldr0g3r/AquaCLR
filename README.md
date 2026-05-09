@@ -214,16 +214,25 @@ What this does:
 
 The skeleton subscribes to `/camera/image_raw` and publishes
 `/camera/image_desnowed`. Topics, backend (`trt`/`torch`), engine
-path, and checkpoint are all ROS parameters.
+path, and checkpoint are all ROS parameters. The node is
+API-compatible with both **ROS2 Humble** (Ubuntu 22.04) and
+**ROS2 Jazzy** (Ubuntu 24.04, LTS until 2029).
 
 ```bash
-# Inside a ROS2 Humble container or sourced env:
+# Inside a ROS2 container or sourced env (Humble or Jazzy):
 ros2 run aquaclr legion_desnow_node \
   --ros-args \
     -p engine_path:=/work/legion_desnow.engine \
     -p input_topic:=/oak/rgb/image_raw \
     -p output_topic:=/legion/image_desnowed
 ```
+
+> **Running on Fedora 44 with a Ubuntu 24.04 + ROS2 Jazzy
+> distrobox / podman container?**
+> See the full runbook in [`docs/DEPLOYMENT_FEDORA.md`](docs/DEPLOYMENT_FEDORA.md)
+> — host setup, NVIDIA Container Toolkit (CDI), distrobox creation,
+> ROS2 Jazzy install, GPU passthrough verification, and end-to-end
+> smoke tests.
 
 `M2` will publish the predicted transmission as a side-channel for
 SLAM uncertainty weighting.

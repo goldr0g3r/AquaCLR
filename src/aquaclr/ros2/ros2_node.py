@@ -1,9 +1,18 @@
-"""ROS2 Humble node skeleton for LEGION-DeSnow.
+"""ROS2 node skeleton for LEGION-DeSnow (Humble + Jazzy compatible).
 
 This is the **M1 skeleton**: it subscribes to a raw camera topic,
 runs LEGION-DeSnow on each frame, and publishes the cleaned image.
 M2 will extend this with a SLAM-friendly auxiliary topic (transmission
 + confidence) and a synchronised stereo path.
+
+The node only uses the stable ``rclpy.Node`` + ``cv_bridge`` +
+``sensor_msgs/Image`` API surface, so it runs unchanged on:
+
+* **ROS2 Humble Hawksbill** (Ubuntu 22.04 LTS, supported until May 2027)
+* **ROS2 Jazzy Jalisco** (Ubuntu 24.04 LTS, supported until May 2029)
+
+For a deployment runbook on Fedora 44 + a Ubuntu 24.04/Jazzy distrobox
+container with NVIDIA passthrough, see ``docs/DEPLOYMENT_FEDORA.md``.
 
 Topics (all configurable via ROS parameters):
 
@@ -58,8 +67,12 @@ def _import_ros2() -> tuple[Any, Any, Any, Any]:
     except ImportError as exc:  # pragma: no cover
         msg = (
             "ROS2 / cv_bridge are not importable. The ROS2 node requires a "
-            "ROS2 Humble environment with cv_bridge installed via apt:\n"
-            "  sudo apt install ros-humble-cv-bridge ros-humble-sensor-msgs"
+            "ROS2 Humble or Jazzy environment with cv_bridge installed via apt:\n"
+            "  Humble (Ubuntu 22.04): "
+            "sudo apt install ros-humble-cv-bridge ros-humble-sensor-msgs\n"
+            "  Jazzy  (Ubuntu 24.04): "
+            "sudo apt install ros-jazzy-cv-bridge ros-jazzy-sensor-msgs\n"
+            "See docs/DEPLOYMENT_FEDORA.md for the Fedora-host runbook."
         )
         raise ImportError(msg) from exc
 
