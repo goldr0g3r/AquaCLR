@@ -253,6 +253,20 @@ ADAS / autonomous-driving stack. The headline mappings:
 | ROS2 Humble | ROS2 / Apex.AI middleware in autonomy stacks |
 | LEGION-DeSnow | ADAS sensor restoration block (de-rain, de-fog) before SLAM |
 
+## Documentation
+
+- [`MODEL_CARD.md`](MODEL_CARD.md) — intended use, training data, ethical considerations.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — long-form design rationale.
+- [`docs/DEPLOYMENT_FEDORA.md`](docs/DEPLOYMENT_FEDORA.md) — Fedora 44 + Ubuntu 24.04 + ROS2 Jazzy runbook.
+- [`DISSERTATION.md`](DISSERTATION.md) — **M.Tech dissertation master entry point** with full TOC; chapters live under [`docs/dissertation/`](docs/dissertation/).
+- [`docs/README.md`](docs/README.md) — documentation index.
+
+To build the dissertation as a PDF:
+
+```bash
+bash scripts/build_dissertation.sh
+```
+
 ## Cite & references
 
 - Sato, Y. et al. *Marine Snow Removal Benchmarking Dataset*. arXiv:2103.14249. APSIPA 2023.
@@ -261,3 +275,5 @@ ADAS / autonomous-driving stack. The headline mappings:
 - Howard, A. et al. *Searching for MobileNetV3*. ICCV 2019.
 - Wang, Z. et al. *Image quality assessment: from error visibility to structural similarity (SSIM)*. IEEE TIP 2004.
 - McGlamery, B. *A computer model for underwater camera systems*. SPIE 1980.
+
+The complete bibliography is in [`docs/dissertation/12_references.md`](docs/dissertation/12_references.md).
