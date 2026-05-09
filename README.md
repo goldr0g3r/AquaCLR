@@ -1,339 +1,254 @@
-# AquaCLR — Project LEGION M1
+# AquaCLR — LEGION Subsea Perception Front-End (M1)
 
-> Physics-informed CNN for marine-snow removal in subsea video, targeting RTX 3050 / TensorRT FP16.
+> Real-time **physics-informed** marine-snow removal for underwater video.
+> Targets an NVIDIA RTX 3050 (4 GB VRAM) at **< 15 ms / 720 p frame** with **TensorRT FP16**.
 
-[![CI](https://github.com/goldr0g3r/aquaclr/actions/workflows/ci.yml/badge.svg)](https://github.com/goldr0g3r/aquaclr/actions/workflows/ci.yml)
-[![Python 3.10–3.12](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue.svg)](https://www.python.org/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Typed: mypy --strict](https://img.shields.io/badge/typed-mypy%20strict-2a6db4.svg)](https://mypy.readthedocs.io/)
-[![Pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen.svg)](.pre-commit-config.yaml)
-
-AquaCLR (`aquaclr`) is the Milestone-1 deliverable of **Project LEGION**:
-a real-time, physics-informed image-restoration front-end for subsea
-ROV / AUV perception. It removes "marine snow" — the floating organic
-particles that occlude underwater cameras — while preserving the
-geometry that downstream SLAM and detection modules depend on.
-
-The network learns only the **physical parameters** of the
-Jaffe–McGlamery scattering model (`t(x)`, `B`) and inverts them
-analytically to recover the clean image `J`. This constrains the
-network to physically plausible solutions, which is what gives it the
-out-of-distribution robustness a vanilla image-to-image translator of
-the same size cannot match.
-
-> **Automotive SiL parallel.** AquaCLR plays the role of a sensor
-> preprocessing block (think "camera de-rain" / "lidar declutter") in
-> an ADAS perception stack. The Jaffe–McGlamery model maps 1:1 onto
-> the Koschmieder atmospheric scattering model used to render rain and
-> fog in DriveSim-class simulators. Replace MSRB with rain-augmented
-> KITTI and the same architecture denoises automotive frames before
-> SLAM.
+[![CI](https://img.shields.io/badge/ci-github_actions-blue)](.github/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 ---
 
 ## Table of contents
 
-- [Highlights](#highlights)
-- [Architecture](#architecture)
-- [Loss design](#loss-design)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Training](#training)
+- [Why](#why) — what problem this solves and why physics-informed
+- [Architecture overview](#architecture-overview)
+- [Project layout](#project-layout)
 - [Datasets](#datasets)
-- [Repository layout](#repository-layout)
-- [Roadmap](#roadmap)
-- [Development](#development)
-- [License](#license)
-- [Citation](#citation)
+- [Quickstart](#quickstart)
+- [Training](#training)
+- [Evaluation](#evaluation)
+- [Export to TensorRT](#export-to-tensorrt)
+- [ROS2 deployment](#ros2-deployment)
+- [Automotive SiL parallels](#automotive-sil-parallels)
+- [Cite & references](#cite--references)
 
 ---
 
-## Highlights
+## Why
 
-| Property                | Value / target                                                            |
-| ----------------------- | ------------------------------------------------------------------------- |
-| Task                    | Single-frame marine-snow removal (image restoration)                      |
-| Image-formation model   | Simplified Jaffe–McGlamery `I = J·t + B·(1 − t)`                          |
-| Backbone                | MobileNetV3-Small (ImageNet pretrained, ~1.5 M params)                    |
-| Decoder                 | Lightweight UNet built from depthwise-separable convs (DSC) + ReLU6       |
-| Heads                   | Per-pixel transmission `t(x)` + global 3-vector backscatter `B`           |
-| Recovery                | **Closed-form** Jaffe–McGlamery inversion (no extra learnable params)     |
-| Parameter budget        | ~4–6 M params → ~9–12 MB at FP16 (well under the 50 MB M1 ceiling)        |
-| Target hardware         | RTX 3050 4 GB (Ampere) / Jetson Orin-class via TensorRT FP16              |
-| Mixed precision         | `bf16-mixed` (Ampere-native; safer than FP16 for squared-term losses)     |
-| Reproducibility         | Deterministic seeding, MD5-verified dataset downloads, strict mypy        |
-| Deployment              | ONNX export → TensorRT engine; ROS 2 Humble node planned for M1.5         |
+Underwater imagery suffers from **marine snow** — bright particulate
+streaks created by organic debris drifting between the scene and the
+camera. These artefacts (a) wreck downstream SLAM feature-matching
+and (b) are extremely hard to remove with vanilla image-to-image
+networks because they share statistics with legitimate scene
+highlights.
 
-## Architecture
+We follow the simplified Jaffe-McGlamery image-formation model:
 
-```
-   I ∈ [0,1]^(B,3,H,W)
-         │
-         ▼
-   ImageNet normalize ──┐
-         │              │
-   MobileNetV3-Small    │   (4 pyramid taps: /4, /8, /16, /32)
-         │              │
-         ▼              │
-   UNet decoder (DSC) ──┘
-   ├─ feat_full  (stride /2 → /1)
-   └─ feat_deep  (stride /32, global pool)
-         │              │
-         ▼              ▼
-   Transmission     Backscatter
-     head t(x)        head B
-   (B,1,H,W)         (B,3)
-         │              │
-         └──────┬───────┘
-                ▼
-       J = (I − B·(1 − t)) / clamp(t, ε)
-       ──────────── analytic Jaffe–McGlamery inversion ────────────
-                ▼
-       J ∈ [0,1]^(B,3,H,W)   (LEGIONOutputs.j, .t, .b)
-```
+$$
+I(x) \;=\; J(x)\,t(x) \;+\; B \,(1 - t(x))
+$$
 
-See `src/aquaclr/models/model.py` for the canonical
-`LEGIONDeSnowNet` definition and `src/aquaclr/utils/physics.py` for
-the forward + inverse Jaffe–McGlamery operators.
+| Symbol | Meaning |
+| --- | --- |
+| `I(x)` | Observed (snowy) frame |
+| `J(x)` | Clean scene radiance (what we want) |
+| `t(x) ∈ [0, 1]` | Per-pixel medium transmission |
+| `B ∈ [0, 1]³` | Global ambient backscatter |
 
-## Loss design
+Instead of regressing `J` directly, the network predicts `(t, B)` and
+inverts the equation analytically. This **physics-informed** factoring
+both:
+- shrinks the hypothesis space (the network can't make up colours
+  that aren't compatible with underwater optics), and
+- gives downstream SLAM a free **per-pixel confidence map** in the
+  form of `t(x)`.
 
-The training objective combines four signals, plus an optional fifth
-when ground-truth transmission is available (LSUI):
+## Architecture overview
 
 ```
-L = λ_rec · L_rec        # Charbonnier(J_pred, J_gt)
-  + λ_phys · L_phys      # Charbonnier(I, J_gt·t + B·(1 − t))      forward consistency
-  + λ_ssim · (1 − SSIM)  # protect SLAM-grade structure
-  + λ_tv  · TV(t)        # piecewise-smooth transmission
-  + λ_t   · ||t − t_gt|| # only when t_gt is provided (LSUI)
+   I (B,3,H,W)  ────► MobileNetV3-Small encoder  ─┐
+                                                   ├──► UNet-DSC decoder ──► t-head ──► t (B,1,H,W)
+                                                   │                       └► B-head ──► B (B,3)
+                                                   │
+                                                   └─► Jaffe-McGlamery inversion ──► J (B,3,H,W)
 ```
 
-`L_phys` anchors `(t, B)` to physically meaningful values rather than
-arbitrary factorisations that happen to make `J` come out right.
-SSIM preserves features (corals, rocks) that downstream SLAM uses as
-keypoints. Defaults are tuned in
-`configs/train/rtx3050_bf16.yaml`.
+| Block | Role | Params |
+| --- | --- | --- |
+| MobileNetV3-Small encoder (ImageNet-pretrained) | Multi-scale features at /4, /8, /16, /32 | ~1.5 M |
+| UNet decoder w/ depthwise-separable convs | Aggregate features back to /2 | ~2.5 M |
+| Transmission head (1×1 conv → sigmoid) | `t(x)` | < 0.1 K |
+| Backscatter head (GAP → MLP → sigmoid) | `B` (3-vector) | ~3 K |
+| **Total** | — | **~4–6 M (≤ 24 MB FP32, ≤ 12 MB FP16)** |
 
-## Installation
+## Project layout
 
-AquaCLR uses [`uv`](https://github.com/astral-sh/uv) for dependency
-management. With `uv` installed:
+```
+AquaCLR/
+├─ pyproject.toml           # uv-managed, ruff + mypy + pytest config
+├─ .pre-commit-config.yaml  # ruff-format, ruff-check, mypy, codespell
+├─ .github/workflows/ci.yml # lint + tests + ONNX-export smoke
+├─ configs/                 # Hydra configs (composable model/data/train)
+├─ src/aquaclr/             # package source
+│  ├─ models/               # LEGIONDeSnowNet, encoder, decoder, heads
+│  ├─ losses/               # physics_loss.py, ssim.py, tv.py
+│  ├─ data/                 # MSRB + LSUI datasets, transforms, snow synth
+│  ├─ training/             # Lightning module + callbacks
+│  ├─ inference/            # ONNX export + TensorRT runner + benchmark
+│  ├─ ros2/                 # ROS2 Humble node skeleton
+│  └─ utils/                # seed, physics, logging
+├─ scripts/                 # train, evaluate, export_onnx
+├─ tests/                   # pytest suite (CPU + gpu/trt-marked)
+└─ docker/Dockerfile.trt    # NVIDIA CUDA + TRT image for deployment
+```
+
+## Datasets
+
+We deeply analysed the underwater imaging dataset landscape and
+recommend a **two-source** training mix:
+
+| Dataset | Pairs | What we use it for | Why this one |
+| --- | --- | --- | --- |
+| **[MSRB](https://github.com/ychtanaka/marine-snow)** (Sato et al., APSIPA 2023) | 2,300 train / 400 test, 384×384 | **Primary** training signal | Purpose-built for marine-snow removal. Two tasks (small particles ≤6 px; mixed sizes ≤32 px). The only public dataset that gives perfect (snowy I, clean J) pairs for our exact problem. |
+| **[LSUI](https://lintaopeng.github.io/_pages/UIE%20Project%20Page.html)** (Peng et al., 2021) | 4,279 pairs + GT transmission maps | Auxiliary; enables direct supervision on `t(x)` | LSUI is one of the very few public underwater datasets that ships **ground-truth medium transmission maps**. This is gold for a physics-informed model. |
+| **[UIEB](https://li-chongyi.github.io/proj_benchmark.html)** (Li et al., 2019) | 890 pairs + 60 challenge | **Held-out** real-world evaluation only | Standard underwater enhancement benchmark; the 60-image *Challenge* split is unpaired and tests real-world generalisation. |
+
+> **TL;DR**: train on MSRB + LSUI, evaluate on UIEB-Challenge.
+
+See [`MODEL_CARD.md`](MODEL_CARD.md) for the latest download URLs and
+unpacking instructions.
+
+## Quickstart
+
+### 1. Install
+
+We use [`uv`](https://github.com/astral-sh/uv) (fast pip + venv
+replacement). If you don't have it: `pip install uv`.
 
 ```bash
-git clone https://github.com/goldr0g3r/aquaclr.git
-cd aquaclr
-uv sync --extra dev          # core + dev tools (ruff, mypy, pytest, pre-commit)
-uv run pre-commit install    # enable pre-commit on every git commit
+uv venv .venv
+uv sync --extra dev               # core + dev tools
+# Optional — only on Linux with NVIDIA stack:
+uv sync --extra dev --extra trt   # adds onnx, onnxruntime-gpu, tensorrt, pycuda
 ```
 
-Pip-only install (editable, with dev extras):
+### 2. Get the data
+
+Place MSRB under `data/msrb/{train,test}/{noisy,clean}/` and LSUI
+under `data/lsui/{input,GT,transmission}/`. The dataloaders raise a
+clear error pointing here if the layout is wrong.
+
+> **No dataset yet?** The MSRB loader has a built-in synthetic-snow
+> fallback (`synthesize_if_missing=True`) so you can smoke-test the
+> training loop with only the clean half of the dataset.
+
+### 3. Train
 
 ```bash
-python -m venv .venv && . .venv/Scripts/activate   # Windows
-# . .venv/bin/activate                              # Linux / macOS
-pip install -e ".[dev]"
+uv run python scripts/train.py
 ```
 
-Optional extras:
+This composes `configs/default.yaml` (model=`legion_desnow_s`,
+data=`combined`, train=`rtx3050_bf16`).
 
-| Extra  | What you get                                                              |
-| ------ | ------------------------------------------------------------------------- |
-| `dev`  | `ruff`, `mypy`, `pytest`, `pytest-cov`, `pre-commit`, type stubs          |
-| `trt`  | `onnx`, `onnxsim`, `onnxruntime[-gpu]`; `tensorrt` + `pycuda` on Linux    |
-| `ros2` | Python-side helpers for the ROS 2 node (rclpy / cv_bridge come from apt)  |
+Override anything from the CLI:
 
-> Python 3.10–3.12 is supported. PyTorch is pinned to `>=2.5,<2.7`
-> (CUDA 12.4 verified). Install a CUDA-matching wheel from the PyTorch
-> index if `uv sync` resolves to a CPU-only build.
-
-## Quick start
-
-```python
-import torch
-from aquaclr.models import LEGIONDeSnowNet
-
-model = LEGIONDeSnowNet(pretrained=True).eval().cuda()
-
-i = torch.rand(1, 3, 384, 384, device="cuda")   # snowy frame in [0, 1]
-with torch.no_grad():
-    out = model(i)                              # LEGIONOutputs(j, t, b)
-
-print("J:", out.j.shape, "t:", out.t.shape, "B:", out.b.shape)
-print(f"params={model.num_parameters/1e6:.2f} M, "
-      f"fp16_size={model.estimate_size_mb(dtype=torch.float16):.2f} MB")
+```bash
+uv run python scripts/train.py \
+  data=msrb \
+  train.max_epochs=30 \
+  train.optimizer.lr=1e-4 \
+  train.precision=bf16-mixed
 ```
 
-ONNX-friendly export uses the flat-tuple wrapper:
+Multirun sweep:
 
-```python
-model.eval()
-torch.onnx.export(
-    model, (torch.rand(1, 3, 384, 384),),
-    "legion_desnow.onnx",
-    input_names=["I"], output_names=["J", "t", "B"],
-    opset_version=17,
-    dynamic_axes={"I": {0: "B", 2: "H", 3: "W"}},
-)
-# Hint: call model.forward_export(...) inside the export wrapper to
-# avoid the dataclass return; see model.py.
+```bash
+uv run python scripts/train.py -m \
+  train.optimizer.lr=1e-4,3e-4,1e-3 \
+  train.loss.lambda_phys=0.25,0.5,1.0
 ```
 
 ## Training
 
-Training is wired through Hydra. The default composition is
-`model=legion_desnow_s · data=combined · train=rtx3050_bf16`:
+| Knob | Default | Where |
+| --- | --- | --- |
+| Mixed precision | `bf16-mixed` | `configs/train/rtx3050_bf16.yaml` |
+| Optimiser | AdamW (`lr=3e-4`, `wd=1e-4`) | same |
+| Schedule | OneCycleLR (cosine) | same |
+| Batch size | 16 (MSRB) / 8 (LSUI) | `configs/data/*.yaml` |
+| EMA decay | 0.9995 | same |
+| `torch.compile` | `reduce-overhead` (auto-disabled for export) | same |
+| Channels-last | on | `configs/model/legion_desnow_s.yaml` |
+| Backbone freeze | first 2 epochs | same |
+| Loss weights | `λ_rec=1, λ_phys=0.5, λ_ssim=0.5, λ_tv=1e-2, λ_t=0.5` | same |
+
+Logs go to TensorBoard by default; W&B if `WANDB_API_KEY` is set.
+
+## Evaluation
 
 ```bash
-# RTX 3050 4 GB profile (bf16-mixed, 256² crops, OneCycleLR)
-uv run python scripts/train.py
-
-# Override anything from the CLI
-uv run python scripts/train.py data=msrb train.max_epochs=80 train.optimizer.lr=2e-4
-
-# Multirun sweep
-uv run python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3
-
-# Disable wandb for an offline run
-WANDB_DISABLED=1 uv run python scripts/train.py
+uv run python scripts/evaluate.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/msrb \
+  --split test --task 1
 ```
 
-ONNX export and a CPU/GPU benchmark live alongside the trainer:
+Reports PSNR + SSIM. For UIEB no-reference scores (UIQM, UCIQE) we
+include hooks but expect the user to install
+[`pyiqa`](https://github.com/chaofengc/IQA-PyTorch) separately.
+
+## Export to TensorRT
 
 ```bash
-uv run python scripts/export_onnx.py --ckpt outputs/<run>/ckpts/last.ckpt --out legion_desnow.onnx
-uv run python scripts/evaluate.py --ckpt outputs/<run>/ckpts/last.ckpt
+uv run python scripts/export_onnx.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --out outputs/legion_desnow.onnx \
+  --height 720 --width 1280 \
+  --build-trt --benchmark
 ```
 
-Useful environment variables:
+What this does:
+1. Loads the checkpoint.
+2. Exports to ONNX (opset 17, dynamic batch + `H` + `W`).
+3. Verifies ONNX vs PyTorch parity (`atol=1e-3`).
+4. Builds a TensorRT FP16 engine with a 256–720 p shape profile.
+5. Runs a 200-iter latency benchmark and prints p50/p95/FPS/VRAM.
 
-| Variable                | Effect                                                          |
-| ----------------------- | --------------------------------------------------------------- |
-| `AQUACLR_DATA_ROOT`     | Override the data root (defaults to `./data`)                   |
-| `AQUACLR_OUTPUT_ROOT`   | Override the output root (defaults to `./outputs`)              |
-| `AQUACLR_DISABLE_GPU=1` | Force CPU; used by CI                                           |
-| `AQUACLR_WANDB`         | `false` → disable wandb logging (TensorBoard still on)          |
+> **Tip**: TensorRT is Linux-only; on Windows, stop after the ONNX
+> export and use `onnxruntime-gpu` for inference.
 
-Config knobs you'll touch most often live in
-`configs/train/rtx3050_bf16.yaml` (precision, optimiser, loss
-weights, EMA, sample logging) and `configs/model/legion_desnow_s.yaml`
-(decoder widths, channels-last, transmission `eps`).
+## ROS2 deployment
 
-## Datasets
-
-| Dataset | Role                                                  | Config                       |
-| ------- | ----------------------------------------------------- | ---------------------------- |
-| MSRB    | Marine Snow Removal Benchmark (Sato et al., APSIPA'23) — paired (I, J) | `configs/data/msrb.yaml`     |
-| LSUI    | Large-Scale Underwater Image (Peng et al., 2021) — adds rare ground-truth transmission `t_gt` for direct supervision | `configs/data/lsui.yaml`     |
-| Combined | Mix sampler (default 70 % MSRB, 30 % LSUI)            | `configs/data/combined.yaml` |
-
-Datasets must be placed under `${AQUACLR_DATA_ROOT}` (default `./data`)
-following the directory layout each DataModule expects. First-run
-download is gated behind `download: true` in the relevant config and
-uses MD5-verified streaming (`src/aquaclr/data/download.py`).
-A procedural fallback synthesiser (`synthesize_marine_snow`) is
-provided in `src/aquaclr/data/snow_synthesis.py` for environments
-where the official MSRB pairs are unavailable, but headline numbers
-should always be reported on the official MSRB pairs.
-
-## Repository layout
-
-```
-.
-├── configs/                       # Hydra configs
-│   ├── default.yaml               # top-level composition
-│   ├── data/                      # dataset configs (msrb, lsui, combined)
-│   ├── model/legion_desnow_s.yaml
-│   └── train/rtx3050_bf16.yaml
-├── scripts/                       # Hydra-driven CLIs (train, export, eval)
-│   ├── train.py
-│   ├── export_onnx.py
-│   └── evaluate.py
-├── src/aquaclr/
-│   ├── data/                      # MSRB / LSUI / combined DataModules + MD5 download
-│   ├── losses/                    # PhysicsInformedLoss, SSIM, TV
-│   ├── models/
-│   │   ├── backbones/mobilenet_v3.py
-│   │   ├── decoders/unet_dsc.py
-│   │   ├── heads/{transmission,backscatter}.py
-│   │   └── model.py               # LEGIONDeSnowNet (canonical entry point)
-│   ├── training/                  # Lightning module + EMA / VRAM / sample-logger callbacks
-│   ├── inference/                 # ONNX export, TensorRT builder/runner, benchmark
-│   ├── ros2/                      # ROS 2 Humble node skeleton (M1.5)
-│   └── utils/
-│       ├── physics.py             # Jaffe–McGlamery forward + inverse
-│       └── seed.py
-├── tests/                         # pytest (auto-skips GPU/TRT-marked tests)
-├── data/.gitkeep                  # local dataset root (gitignored)
-├── .github/workflows/ci.yml       # lint · type-check · pytest · ONNX smoke
-├── .pre-commit-config.yaml        # ruff, mypy, codespell, hygiene
-└── pyproject.toml                 # build, deps, ruff, mypy, pytest, coverage
-```
-
-## Roadmap
-
-- **M1 (current — Alpha).** LEGION-DeSnow-S reference implementation,
-  physics-informed loss, MSRB + LSUI training pipeline, ONNX export
-  smoke test in CI. *Status: model + losses + configs complete;
-  DataModules + Lightning training loop + entry-point scripts under
-  active implementation (see `pyproject.toml` `[project.scripts]`).*
-- **M1.5.** TensorRT FP16 engine builder, latency benchmark on RTX 3050
-  / Jetson Orin Nano, ROS 2 Humble node (`/camera/raw` → `/camera/desnowed`).
-- **M2.** Temporal coherence loss across consecutive ROV frames,
-  INT8 quantisation-aware training, sea-trial dataset capture.
-
-Issues and milestones live on the [project board](https://github.com/goldr0g3r/aquaclr/issues).
-
-## Development
+The skeleton subscribes to `/camera/image_raw` and publishes
+`/camera/image_desnowed`. Topics, backend (`trt`/`torch`), engine
+path, and checkpoint are all ROS parameters.
 
 ```bash
-uv run ruff check .            # lint
-uv run ruff format --check .   # formatting
-uv run mypy                    # strict type-check (src/aquaclr)
-uv run pytest -q               # unit tests (auto-skip GPU/TRT if absent)
-uv run pre-commit run -a       # all hooks against the whole tree
+# Inside a ROS2 Humble container or sourced env:
+ros2 run aquaclr legion_desnow_node \
+  --ros-args \
+    -p engine_path:=/work/legion_desnow.engine \
+    -p input_topic:=/oak/rgb/image_raw \
+    -p output_topic:=/legion/image_desnowed
 ```
 
-Tests are split with pytest markers — `gpu` and `trt` are auto-skipped
-when the relevant hardware/runtime is unavailable, and `slow` carries
-tests longer than 5 s. CI runs lint + mypy on every push, then the
-pytest matrix on Python 3.10 / 3.11 / 3.12 plus an ONNX export smoke
-job.
+`M2` will publish the predicted transmission as a side-channel for
+SLAM uncertainty weighting.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full development
-workflow, branch conventions, and how to run the pre-commit suite
-locally.
+## Automotive SiL parallels
 
-## License
+Every public class/function in this repo carries an "Automotive SiL
+parallel" docstring describing the analogous component in an
+ADAS / autonomous-driving stack. The headline mappings:
 
-Apache License 2.0 © Project LEGION. See [`LICENSE`](LICENSE).
+| Marine context | Automotive analogue |
+| --- | --- |
+| Marine snow | Lidar rain clutter / camera rain droplets |
+| Jaffe-McGlamery `I = J·t + B(1−t)` | Koschmieder atmospheric scattering |
+| Transmission map `t(x)` | Per-ray optical depth / lidar return-intensity confidence |
+| Backscatter `B` | Airlight constant / radar noise floor |
+| TensorRT engine | DRIVE Orin engine cache |
+| ROS2 Humble | ROS2 / Apex.AI middleware in autonomy stacks |
+| LEGION-DeSnow | ADAS sensor restoration block (de-rain, de-fog) before SLAM |
 
-## Citation
+## Cite & references
 
-If you use AquaCLR in academic work, please cite the underlying
-benchmarks alongside this repository:
-
-```bibtex
-@software{aquaclr2026,
-  title  = {AquaCLR: Physics-Informed Marine-Snow Removal for Subsea Video},
-  author = {Project LEGION},
-  year   = {2026},
-  url    = {https://github.com/goldr0g3r/aquaclr},
-  note   = {Milestone 1, v0.1.0}
-}
-
-@inproceedings{sato2023marine,
-  title     = {A Benchmark for Marine Snow Removal in Underwater Images},
-  author    = {Sato, et al.},
-  booktitle = {APSIPA ASC},
-  year      = {2023}
-}
-
-@article{peng2023lsui,
-  title   = {U-shape Transformer for Underwater Image Enhancement},
-  author  = {Peng, et al.},
-  journal = {IEEE TIP},
-  year    = {2023}
-}
-```
+- Sato, Y. et al. *Marine Snow Removal Benchmarking Dataset*. arXiv:2103.14249. APSIPA 2023.
+- Peng, L. et al. *U-shape Transformer for Underwater Image Enhancement*. 2021.
+- Li, C. et al. *An Underwater Image Enhancement Benchmark Dataset and Beyond*. IEEE TIP 2019.
+- Howard, A. et al. *Searching for MobileNetV3*. ICCV 2019.
+- Wang, Z. et al. *Image quality assessment: from error visibility to structural similarity (SSIM)*. IEEE TIP 2004.
+- McGlamery, B. *A computer model for underwater camera systems*. SPIE 1980.
