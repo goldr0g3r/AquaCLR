@@ -12,6 +12,8 @@ Examples:
     Multirun sweep over learning rates::
 
         python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3
+
+        wandb API: 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
 """
 
 from __future__ import annotations
@@ -50,7 +52,9 @@ def main(cfg: DictConfig) -> None:
     )
     from aquaclr.utils import seed_everything
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(name)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s | %(name)s | %(message)s"
+    )
     logger.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg))
     seed_everything(int(cfg.seed), deterministic=bool(cfg.deterministic))
 
@@ -87,7 +91,9 @@ def main(cfg: DictConfig) -> None:
     if cfg.train.callbacks.ema.enabled:
         callbacks.append(EMAWeightCallback(decay=cfg.train.callbacks.ema.decay))
     if cfg.train.callbacks.vram_monitor.enabled:
-        callbacks.append(VRAMMonitor(every_n_steps=cfg.train.callbacks.vram_monitor.every_n_steps))
+        callbacks.append(
+            VRAMMonitor(every_n_steps=cfg.train.callbacks.vram_monitor.every_n_steps)
+        )
     callbacks.append(
         SampleImageLogger(
             every_n_steps=cfg.train.callbacks.sample_logger.every_n_steps,
