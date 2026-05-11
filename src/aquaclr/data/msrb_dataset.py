@@ -5,20 +5,27 @@ Reference:
     2023. arXiv: 2103.14249. Repository:
     https://github.com/ychtanaka/marine-snow
 
-Layout we expect on disk (after the user has downloaded and unpacked
-the archive into ``root``):
+Layout we expect on disk (the canonical upstream layout from
+the ``ychtanaka/marine-snow`` repo, after unpacking into ``root``):
 
 .. code-block::
 
     root/
-    ├─ train/
-    │  ├─ noisy/   # snowy I, 384x384 PNGs
-    │  └─ clean/   # paired clean J, same filename stem
+    ├─ training/
+    │  ├─ original/    # clean reference J, 384x384 PNGs
+    │  ├─ MSR_Task1/   # snowy I — small particles (<=6 px)
+    │  └─ MSR_Task2/   # snowy I — mixed sizes (<=32 px)
     └─ test/
-       ├─ noisy/
-       └─ clean/
+       ├─ original/
+       ├─ MSR_Task1/
+       └─ MSR_Task2/
 
-Files in ``noisy/`` and ``clean/`` are paired by **filename stem**.
+Files in ``original/`` and ``MSR_Task{1,2}/`` are paired by
+**filename stem**. The ``task`` argument selects which snowy variant
+the dataset yields.
+
+For backward compatibility we also accept the older flattened layout
+(``train/clean``, ``train/noisy``, ``test/clean``, ``test/noisy``).
 """
 
 from __future__ import annotations
@@ -51,18 +58,20 @@ class MSRBDataset(Dataset[dict[str, Tensor]]):
 
     Args:
         root: Path to the unpacked MSRB folder.
-        split: ``"train"`` or ``"test"``.
-        task: ``1`` (small particles) or ``2`` (mixed sizes). Currently the
-            class assumes the user has placed the right task's files in
-            ``noisy/``; the ``task`` argument is recorded in metadata
-            only.
+        split: ``"train"`` or ``"test"``. Both the upstream split name
+            (``training`` / ``test``) and the legacy alias
+            (``train`` / ``test``) are auto-detected on disk.
+        task: ``1`` (small particles, ``MSR_Task1``) or ``2`` (mixed
+            sizes, ``MSR_Task2``). Selects which snowy variant folder
+            is used to pair against ``original/``.
         transform: Albumentations-style transform expected to accept the
             keyword args ``image=`` (snowy I) and ``image_clean=``
             (clean J).
-        synthesize_if_missing: If True and ``noisy/`` is empty but
-            ``clean/`` is not, the dataset synthesises snow on the fly
-            via :func:`synthesize_marine_snow`. Useful for smoke tests
-            and CI before the real dataset is downloaded.
+        synthesize_if_missing: If True and the snowy-variant folder is
+            empty/missing but ``original/`` is populated, the dataset
+            synthesises snow on the fly via
+            :func:`synthesize_marine_snow`. Useful for smoke tests and
+            CI before the real dataset is downloaded.
     """
 
     SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
@@ -80,23 +89,18 @@ class MSRBDataset(Dataset[dict[str, Tensor]]):
         if split not in {"train", "test"}:
             msg = f"split must be 'train' or 'test', got {split!r}"
             raise ValueError(msg)
+        if int(task) not in {1, 2}:
+            msg = f"task must be 1 or 2, got {task!r}"
+            raise ValueError(msg)
         self.root = Path(root)
         self.split = split
         self.task = int(task)
         self.transform = transform
         self.synthesize_if_missing = bool(synthesize_if_missing)
 
-        split_root = self.root / split
-        self.clean_dir = split_root / "clean"
-        self.noisy_dir = split_root / "noisy"
-
-        if not self.clean_dir.exists():
-            msg = (
-                f"MSRB clean directory not found at {self.clean_dir}. "
-                "Download the dataset (see configs/data/msrb.yaml) "
-                "and unpack into the configured root."
-            )
-            raise FileNotFoundError(msg)
+        self.split_root, self.clean_dir, self.noisy_dir = self._resolve_dirs(
+            self.root, self.split, self.task
+        )
 
         clean_files = sorted(p for p in self.clean_dir.iterdir() if p.suffix.lower() in self.SUFFIXES)
         if not clean_files:
@@ -104,10 +108,14 @@ class MSRBDataset(Dataset[dict[str, Tensor]]):
             raise FileNotFoundError(msg)
 
         self.synthesize_active = False
-        if not self.noisy_dir.exists() or not any(self.noisy_dir.iterdir()):
+        noisy_missing = self.noisy_dir is None or not any(self.noisy_dir.iterdir())
+        if noisy_missing:
             if not self.synthesize_if_missing:
+                where = self.noisy_dir if self.noisy_dir is not None else (
+                    self.split_root / f"MSR_Task{self.task}"
+                )
                 msg = (
-                    f"MSRB noisy directory empty at {self.noisy_dir}. "
+                    f"MSRB snowy directory empty/missing for task {self.task} at {where}. "
                     "Either pre-render the snowy pairs or pass synthesize_if_missing=True."
                 )
                 raise FileNotFoundError(msg)
@@ -115,10 +123,50 @@ class MSRBDataset(Dataset[dict[str, Tensor]]):
 
         self.samples: list[tuple[Path, Path | None]] = []
         for cf in clean_files:
-            nf: Path | None = self.noisy_dir / cf.name
-            if self.synthesize_active or (nf is not None and not nf.exists()):
-                nf = None
-            self.samples.append((cf, nf))
+            if self.synthesize_active or self.noisy_dir is None:
+                self.samples.append((cf, None))
+                continue
+            nf = self.noisy_dir / cf.name
+            self.samples.append((cf, nf if nf.exists() else None))
+
+    @staticmethod
+    def _resolve_dirs(
+        root: Path, split: str, task: int
+    ) -> tuple[Path, Path, Path | None]:
+        """Locate ``(split_root, clean_dir, noisy_dir)`` under ``root``.
+
+        Supports both the canonical upstream MSRB layout
+        (``training/original`` + ``training/MSR_Task{1,2}``) and the
+        legacy flattened layout (``train/clean`` + ``train/noisy``).
+        Returns ``noisy_dir=None`` when no snowy folder is present, so
+        the caller can decide whether to fall back to synthesis.
+        """
+        if split == "train":
+            split_candidates = [root / "training", root / "train"]
+        else:
+            split_candidates = [root / "test"]
+        split_root = next((p for p in split_candidates if p.is_dir()), None)
+        if split_root is None:
+            msg = (
+                f"MSRB split directory not found for split={split!r} under {root}. "
+                f"Expected one of: {[str(p) for p in split_candidates]}. "
+                "See README.md → Datasets for the expected on-disk layout."
+            )
+            raise FileNotFoundError(msg)
+
+        clean_candidates = [split_root / "original", split_root / "clean"]
+        clean_dir = next((p for p in clean_candidates if p.is_dir()), None)
+        if clean_dir is None:
+            msg = (
+                f"MSRB clean directory not found under {split_root}. "
+                f"Expected one of: {[str(p) for p in clean_candidates]}."
+            )
+            raise FileNotFoundError(msg)
+
+        noisy_candidates = [split_root / f"MSR_Task{task}", split_root / "noisy"]
+        noisy_dir = next((p for p in noisy_candidates if p.is_dir()), None)
+
+        return split_root, clean_dir, noisy_dir
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -218,7 +266,9 @@ class MSRBDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else object):
         """
         if not self.download:
             return
-        if (self.root / "train" / "clean").exists():
+        upstream = (self.root / "training" / "original").is_dir()
+        legacy = (self.root / "train" / "clean").is_dir()
+        if upstream or legacy:
             return
         msg = (
             "Automatic MSRB download is not implemented. Please follow "

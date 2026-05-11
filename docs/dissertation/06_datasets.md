@@ -82,23 +82,34 @@ For each clean image `J`:
 
 ### 6.2.5 Layout expected on disk
 
+We follow the canonical upstream layout from the
+[`ychtanaka/marine-snow`](https://github.com/ychtanaka/marine-snow)
+repository verbatim, so that no archive-side renames are required:
+
 ```
 data/msrb/
-├─ train/
-│  ├─ noisy/   # snowy I, 384x384 PNGs
-│  └─ clean/   # paired clean J, same filename stem
+├─ training/
+│  ├─ original/    # clean reference J, 384x384 PNGs
+│  ├─ MSR_Task1/   # snowy I — small particles (<=6 px)
+│  └─ MSR_Task2/   # snowy I — mixed sizes (<=32 px)
 └─ test/
-   ├─ noisy/
-   └─ clean/
+   ├─ original/
+   ├─ MSR_Task1/
+   └─ MSR_Task2/
 ```
 
 The `MSRBDataset` class
 ([`src/aquaclr/data/msrb_dataset.py`](../../src/aquaclr/data/msrb_dataset.py))
 pairs files by stem and raises a clear error if the layout is wrong.
+The `task` argument (1 or 2) selects which snowy variant is paired
+against `original/`. For backward compatibility, the loader also
+auto-detects the older flattened layout
+(`train/{clean,noisy}` and `test/{clean,noisy}`).
 
 ### 6.2.6 Synth-fallback for development
 
-If `data/msrb/train/noisy/` is empty but `clean/` is populated,
+If the snowy variant directory (`training/MSR_Task{1,2}/`, or the
+legacy `train/noisy/`) is empty but the clean directory is populated,
 the loader falls back to **on-the-fly synthesis** via
 `aquaclr.data.snow_synthesis.synthesize_marine_snow` (see §6.5).
 This lets a developer run the full training loop end-to-end on

@@ -126,9 +126,30 @@ uv sync --extra dev --extra trt   # adds onnx, onnxruntime-gpu, tensorrt, pycuda
 
 ### 2. Get the data
 
-Place MSRB under `data/msrb/{train,test}/{noisy,clean}/` and LSUI
-under `data/lsui/{input,GT,transmission}/`. The dataloaders raise a
-clear error pointing here if the layout is wrong.
+Place MSRB under the canonical upstream layout from
+[`ychtanaka/marine-snow`](https://github.com/ychtanaka/marine-snow):
+
+```
+data/msrb/
+├─ training/
+│  ├─ original/    # clean reference J
+│  ├─ MSR_Task1/   # snowy I — small particles
+│  └─ MSR_Task2/   # snowy I — mixed sizes
+└─ test/
+   ├─ original/
+   ├─ MSR_Task1/
+   └─ MSR_Task2/
+```
+
+The `task` knob in `configs/data/msrb.yaml` (`1` or `2`) picks which
+snowy variant pairs against `original/`.
+
+Place LSUI under `data/lsui/{input,GT}/` (and optionally
+`data/lsui/transmission/` if you have the GT transmission maps —
+they're used as a soft supervision signal when present). The
+dataloaders raise a clear error pointing here if the layout is wrong.
+The legacy flat layout (`data/msrb/{train,test}/{noisy,clean}/`) is
+still auto-detected for older user setups.
 
 > **No dataset yet?** The MSRB loader has a built-in synthetic-snow
 > fallback (`synthesize_if_missing=True`) so you can smoke-test the

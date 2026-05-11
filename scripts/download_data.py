@@ -21,11 +21,15 @@ INSTRUCTIONS = {
         "Marine Snow Removal Benchmark (Sato et al., APSIPA 2023)\n"
         "  Repo:   https://github.com/ychtanaka/marine-snow\n"
         "  Paper:  https://arxiv.org/abs/2103.14249\n"
-        "  Layout (after unpack):\n"
-        "    {root}/train/clean/*.png\n"
-        "    {root}/train/noisy/*.png\n"
-        "    {root}/test/clean/*.png\n"
-        "    {root}/test/noisy/*.png\n"
+        "  Layout (canonical upstream, after unpack):\n"
+        "    {root}/training/original/*.png    # clean reference J\n"
+        "    {root}/training/MSR_Task1/*.png   # snowy I, small particles\n"
+        "    {root}/training/MSR_Task2/*.png   # snowy I, mixed sizes\n"
+        "    {root}/test/original/*.png\n"
+        "    {root}/test/MSR_Task1/*.png\n"
+        "    {root}/test/MSR_Task2/*.png\n"
+        "  Pairing is by filename stem; pick the task via the\n"
+        "  MSRBDataset/MSRBDataModule `task` argument (1 or 2).\n"
     ),
     "lsui": (
         "LSUI (Peng et al., 2021 — U-shape Transformer)\n"
@@ -45,19 +49,33 @@ INSTRUCTIONS = {
     ),
 }
 
-LAYOUT_CHECKS = {
-    "msrb": ("train/clean", "train/noisy"),
+LAYOUT_CHECKS: dict[str, tuple[str, ...]] = {
+    "msrb": ("training/original", "test/original"),
     "lsui": ("input", "GT"),
     "uieb": ("challenging-60",),
+}
+
+# Per-dataset extras where at least ONE of the listed directories must be
+# present (e.g. either snowy variant for MSRB, since some users only fetch
+# one task).
+LAYOUT_ANY_OF: dict[str, tuple[tuple[str, ...], ...]] = {
+    "msrb": (
+        ("training/MSR_Task1", "training/MSR_Task2"),
+        ("test/MSR_Task1", "test/MSR_Task2"),
+    ),
 }
 
 
 def _verify(root: Path, dataset: str) -> bool:
     expected = LAYOUT_CHECKS[dataset]
-    missing = [d for d in expected if not (root / d).exists()]
+    missing = [d for d in expected if not (root / d).is_dir()]
     if missing:
         logger.warning("[%s] missing under %s: %s", dataset, root, missing)
         return False
+    for group in LAYOUT_ANY_OF.get(dataset, ()):
+        if not any((root / d).is_dir() for d in group):
+            logger.warning("[%s] none of %s present under %s", dataset, list(group), root)
+            return False
     logger.info("[%s] layout OK at %s", dataset, root)
     return True
 

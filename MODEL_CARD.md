@@ -59,10 +59,15 @@ Until automated downloads are wired (Milestone 2), please follow the
 official sources directly:
 
 1. **MSRB** — clone or download from <https://github.com/ychtanaka/marine-snow>;
-   unpack into `data/msrb/` so that `data/msrb/train/clean/` and
-   `data/msrb/train/noisy/` exist.
+   unpack into `data/msrb/` using the upstream layout, i.e.
+   `data/msrb/training/original/`, `data/msrb/training/MSR_Task{1,2}/`,
+   and the same trio under `data/msrb/test/`. The `MSRBDataset.task`
+   argument (1 or 2) selects which snowy variant pairs against
+   `original/`. The legacy flat layout
+   (`data/msrb/{train,test}/{noisy,clean}/`) is still auto-detected.
 2. **LSUI** — request from the project page above; place under
-   `data/lsui/{input,GT,transmission}/`.
+   `data/lsui/{input,GT}/`. If you also have the GT transmission maps,
+   add them under `data/lsui/transmission/` (optional).
 3. **UIEB** — download from the project page; place
    `data/uieb/challenging-60/` for evaluation.
 
