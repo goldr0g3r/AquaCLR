@@ -1,0 +1,87 @@
+# Training profile tuned for HP ZBook Fury G8 / NVIDIA RTX A3000 Laptop (6 GB, Ampere SM 8.6).
+# Detected on this machine:
+#   - GPU:  NVIDIA RTX A3000 Laptop, 6 GB VRAM, compute_cap 8.6 (Ampere)
+#   - CPU:  Intel i7-11850H, 8C / 16T, AVX-512 + AVX2
+#   - RAM:  32 GB
+#   - OS:   Windows 11, MSVC 19.43 (cl.exe) available -> torch.compile works
+#
+# Deltas vs configs/train/rtx3050_bf16.yaml:
+#   - accumulate_grad_batches: 2 -> 1   (we have 50% more VRAM, no need to fake batch)
+#   - trainer.benchmark: false -> true  (fixed input shape; cuDNN can auto-tune kernels)
+#   - trainer.log_every_n_steps: 25 -> 20 (slightly tighter logging given faster steps)
+#
+# Recommended companion CLI overrides (data side; this file only owns the train group):
+#   uv run python scripts\train.py train=rtx_a3000_bf16 \
+#       data.msrb.batch_size=16 data.msrb.num_workers=8 \
+#       data.lsui.batch_size=8  data.lsui.num_workers=8
+# (For data=combined, the keys are data.msrb.* and data.lsui.* under the combined group.)
+#
+# Activation reminder for fresh PowerShell sessions on this laptop:
+#   & "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\Launch-VsDevShell.ps1" `
+#       -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+# (puts cl.exe on PATH so the torch.compile / Inductor C++ backend can link.)
+
+max_epochs: 60
+precision: bf16-mixed
+accumulate_grad_batches: 1
+gradient_clip_val: 1.0
+gradient_clip_algorithm: norm
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.OneCycleLR
+  max_lr: 3.0e-4
+  pct_start: 0.1
+  anneal_strategy: cos
+  div_factor: 25.0
+  final_div_factor: 1.0e4
+
+loss:
+  _target_: aquaclr.losses.physics_loss.PhysicsInformedLoss
+  lambda_recon: 1.0
+  lambda_phys: 0.5
+  lambda_ssim: 0.5
+  lambda_tv: 1.0e-2
+  lambda_t: 0.5            # used only when t_gt is present
+  charbonnier: true
+  ssim_window: 11
+
+callbacks:
+  early_stopping:
+    monitor: val/psnr
+    mode: max
+    patience: 12
+  checkpoint:
+    monitor: val/psnr
+    mode: max
+    save_top_k: 3
+    save_last: true
+  ema:
+    enabled: true
+    decay: 0.9995
+  vram_monitor:
+    enabled: true
+    every_n_steps: 50
+  sample_logger:
+    every_n_steps: 200
+    n_samples: 4
+
+trainer:
+  log_every_n_steps: 20
+  val_check_interval: 1.0
+  num_sanity_val_steps: 2
+  # Fixed-shape training (image_size set in data config) makes cuDNN benchmark a free win.
+  benchmark: true
+  deterministic: warn
+  enable_model_summary: true
+  enable_progress_bar: true
+
+compile:
+  enabled: true
+  mode: reduce-overhead   # safe default for small models on Ampere; MSVC must be on PATH
+  fullgraph: false
