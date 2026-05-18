@@ -55,8 +55,15 @@ class EMAWeightCallback(Callback):  # type: ignore[misc]
     def _params(self, module: nn.Module) -> Iterable[tuple[str, nn.Parameter]]:
         return ((n, p) for n, p in module.named_parameters() if p.requires_grad)
 
-    def setup(self, trainer: Any, pl_module: nn.Module, stage: str) -> None:  # noqa: ARG002
-        self._shadow = {n: p.detach().clone() for n, p in self._params(pl_module)}
+    def setup(
+        self, trainer: Any, pl_module: nn.Module, stage: str
+    ) -> None:  # noqa: ARG002
+        # Initialise lazily — do NOT clone parameters here.  setup() is called
+        # before Lightning moves the model to the target device, so cloning now
+        # would leave shadow tensors on CPU while the live parameters end up on
+        # CUDA.  The first on_train_batch_end hit will populate _shadow from the
+        # already-placed parameters via the `shadow is None` branch below.
+        self._shadow = {}
 
     def on_train_batch_end(
         self,
@@ -77,7 +84,9 @@ class EMAWeightCallback(Callback):  # type: ignore[misc]
                 else:
                     shadow.mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
 
-    def on_validation_start(self, trainer: Any, pl_module: nn.Module) -> None:  # noqa: ARG002
+    def on_validation_start(
+        self, trainer: Any, pl_module: nn.Module
+    ) -> None:  # noqa: ARG002
         self._backup = {n: p.detach().clone() for n, p in self._params(pl_module)}
         with torch.no_grad():
             for n, p in self._params(pl_module):
@@ -85,7 +94,9 @@ class EMAWeightCallback(Callback):  # type: ignore[misc]
                 if shadow is not None and shadow.shape == p.shape:
                     p.data.copy_(shadow)
 
-    def on_validation_end(self, trainer: Any, pl_module: nn.Module) -> None:  # noqa: ARG002
+    def on_validation_end(
+        self, trainer: Any, pl_module: nn.Module
+    ) -> None:  # noqa: ARG002
         with torch.no_grad():
             for n, p in self._params(pl_module):
                 bak = self._backup.get(n)
@@ -122,7 +133,9 @@ class VRAMMonitor(Callback):  # type: ignore[misc]
         if not torch.cuda.is_available():
             return
         peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-        pl_module.log("perf/vram_peak_mb", peak_mb, on_step=True, on_epoch=False, prog_bar=False)
+        pl_module.log(
+            "perf/vram_peak_mb", peak_mb, on_step=True, on_epoch=False, prog_bar=False
+        )
 
 
 class SampleImageLogger(Callback):  # type: ignore[misc]
@@ -165,9 +178,13 @@ class SampleImageLogger(Callback):  # type: ignore[misc]
 
         for logger in trainer.loggers:
             try:
-                if hasattr(logger, "experiment") and hasattr(logger.experiment, "add_image"):
+                if hasattr(logger, "experiment") and hasattr(
+                    logger.experiment, "add_image"
+                ):
                     logger.experiment.add_image("samples", img, global_step=step)
                 elif hasattr(logger, "log_image"):
-                    logger.log_image(key="samples", images=[img.permute(1, 2, 0).numpy()])
+                    logger.log_image(
+                        key="samples", images=[img.permute(1, 2, 0).numpy()]
+                    )
             except Exception:  # pragma: no cover - logging must never break training
                 continue

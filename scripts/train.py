@@ -127,7 +127,10 @@ def main(cfg: DictConfig) -> None:
         **OmegaConf.to_container(cfg.train.trainer, resolve=True),  # type: ignore[arg-type]
     )
 
-    trainer.fit(lit, datamodule=datamodule)
+    resume_from: str | None = cfg.get("resume_from") or None
+    if resume_from:
+        logger.info("Resuming from checkpoint: %s", resume_from)
+    trainer.fit(lit, datamodule=datamodule, ckpt_path=resume_from)
     trainer.test(lit, datamodule=datamodule, ckpt_path="best")
 
 

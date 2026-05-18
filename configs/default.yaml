@@ -12,6 +12,11 @@ run_name: ${now:%Y%m%d-%H%M%S}
 seed: 1337
 deterministic: true
 
+# Set to a checkpoint path to resume training (optimizer state + epoch count restored).
+# Use run_name=<old-timestamp> alongside this to continue writing into the same output folder.
+# Example: python scripts/train.py train=rtx_a3000_bf16 resume_from=outputs/20260518-143022/ckpts/last.ckpt
+resume_from: null
+
 paths:
   data_root: ${oc.env:AQUACLR_DATA_ROOT, data}
   output_root: ${oc.env:AQUACLR_OUTPUT_ROOT, outputs}

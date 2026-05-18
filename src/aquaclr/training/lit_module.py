@@ -103,9 +103,15 @@ class LEGIONDeSnowLitModule(L.LightningModule if _LIGHTNING_AVAILABLE else nn.Mo
             )
 
     def on_train_epoch_start(self) -> None:
-        if self.freeze_backbone_epochs > 0 and self.current_epoch < self.freeze_backbone_epochs:
+        if (
+            self.freeze_backbone_epochs > 0
+            and self.current_epoch < self.freeze_backbone_epochs
+        ):
             self.net.freeze_backbone()
-        elif self.freeze_backbone_epochs > 0 and self.current_epoch == self.freeze_backbone_epochs:
+        elif (
+            self.freeze_backbone_epochs > 0
+            and self.current_epoch == self.freeze_backbone_epochs
+        ):
             self.net.unfreeze_backbone()
 
     # -------------------------------------------------------------- forward
@@ -121,28 +127,61 @@ class LEGIONDeSnowLitModule(L.LightningModule if _LIGHTNING_AVAILABLE else nn.Mo
         j_gt = batch["j"]
         out = self.net(i)
         t_gt: Tensor | None = batch.get("t_gt") if bool(batch.get("has_t_gt", False).any()) else None  # type: ignore[union-attr]
-        loss_outputs = self.loss(i=i, j_pred=out.j, j_gt=j_gt, t=out.t, b=out.b, t_gt=t_gt)
+        loss_outputs = self.loss(
+            i=i, j_pred=out.j, j_gt=j_gt, t=out.t, b=out.b, t_gt=t_gt
+        )
 
         log_dict = loss_outputs.to_log_dict(prefix=f"{stage}/loss/")
-        self.log_dict(log_dict, prog_bar=False, on_step=stage == "train", on_epoch=True, sync_dist=True)
+        self.log_dict(
+            log_dict,
+            prog_bar=False,
+            on_step=stage == "train",
+            on_epoch=True,
+            sync_dist=True,
+        )
 
         if stage == "train":
             self.train_psnr.update(out.j.clamp(0, 1), j_gt.clamp(0, 1))
             self.train_ssim.update(out.j.clamp(0, 1), j_gt.clamp(0, 1))
-            self.log("train/psnr", self.train_psnr, prog_bar=True, on_step=False, on_epoch=True)
-            self.log("train/ssim", self.train_ssim, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(
+                "train/psnr",
+                self.train_psnr,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                "train/ssim",
+                self.train_ssim,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+            )
         else:
             self.val_psnr.update(out.j.clamp(0, 1), j_gt.clamp(0, 1))
             self.val_ssim.update(out.j.clamp(0, 1), j_gt.clamp(0, 1))
-            self.log("val/psnr", self.val_psnr, prog_bar=True, on_step=False, on_epoch=True)
-            self.log("val/ssim", self.val_ssim, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(
+                "val/psnr", self.val_psnr, prog_bar=True, on_step=False, on_epoch=True
+            )
+            self.log(
+                "val/ssim", self.val_ssim, prog_bar=True, on_step=False, on_epoch=True
+            )
 
         return loss_outputs.total
 
-    def training_step(self, batch: dict[str, Any], batch_idx: int) -> Tensor:  # noqa: ARG002
+    def training_step(
+        self, batch: dict[str, Any], batch_idx: int
+    ) -> Tensor:  # noqa: ARG002
         return self._shared_step(batch, stage="train")
 
-    def validation_step(self, batch: dict[str, Any], batch_idx: int) -> Tensor:  # noqa: ARG002
+    def validation_step(
+        self, batch: dict[str, Any], batch_idx: int
+    ) -> Tensor:  # noqa: ARG002
+        return self._shared_step(batch, stage="val")
+
+    def test_step(
+        self, batch: dict[str, Any], batch_idx: int
+    ) -> Tensor:  # noqa: ARG002
         return self._shared_step(batch, stage="val")
 
     # -------------------------------------------------------- optimisation
