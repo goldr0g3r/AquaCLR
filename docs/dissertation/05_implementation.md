@@ -32,8 +32,8 @@ AquaCLR/
 ├─ configs/                 # Hydra configs (composable: model x data x train)
 │  ├─ default.yaml
 │  ├─ model/legion_desnow_s.yaml
-│  ├─ data/{msrb,lsui,combined}.yaml
-│  └─ train/rtx3050_bf16.yaml
+│  ├─ data/{msrb,lsui,combined,combined_a3000}.yaml
+│  └─ train/{rtx3050_bf16,rtx_a3000_bf16}.yaml
 ├─ src/aquaclr/             # package source ("src layout")
 │  ├─ __init__.py           # version, top-level docstring
 │  ├─ models/               # network definitions
@@ -67,6 +67,7 @@ AquaCLR/
 │  ├─ train.py              # @hydra.main entrypoint
 │  ├─ evaluate.py           # PSNR/SSIM + optional UIQM/UCIQE (--no-ref)
 │  ├─ evaluate_slam_features.py  # ORB/SIFT keypoint stability benchmark
+│  ├─ infer_camera.py       # real-time webcam / video inference (OpenCV)
 │  ├─ export_onnx.py        # ONNX (+ optional TRT) export
 │  └─ download_data.py      # dataset layout verifier
 ├─ tests/                   # pytest suite

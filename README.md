@@ -82,6 +82,10 @@ AquaCLR/
 ├─ .pre-commit-config.yaml  # ruff-format, ruff-check, mypy, codespell
 ├─ .github/workflows/ci.yml # lint + tests + ONNX-export smoke
 ├─ configs/                 # Hydra configs (composable model/data/train)
+│  ├─ default.yaml
+│  ├─ model/legion_desnow_s.yaml
+│  ├─ data/{msrb,lsui,combined,combined_a3000}.yaml
+│  └─ train/{rtx3050_bf16,rtx_a3000_bf16}.yaml
 ├─ src/aquaclr/             # package source
 │  ├─ models/               # LEGIONDeSnowNet, encoder, decoder, heads
 │  ├─ losses/               # physics_loss.py, ssim.py, tv.py
@@ -90,7 +94,13 @@ AquaCLR/
 │  ├─ inference/            # ONNX export + TensorRT runner + benchmark
 │  ├─ ros2/                 # ROS2 Humble node skeleton
 │  └─ utils/                # seed, physics, logging
-├─ scripts/                 # train, evaluate, export_onnx
+├─ scripts/                 # thin CLI entry points
+│  ├─ train.py              # Hydra entry point
+│  ├─ evaluate.py           # PSNR/SSIM + optional UIQM/UCIQE (--no-ref)
+│  ├─ evaluate_slam_features.py  # ORB/SIFT downstream keypoint benchmark
+│  ├─ infer_camera.py       # real-time webcam / video inference (OpenCV)
+│  ├─ export_onnx.py        # ONNX (+ optional TRT) export
+│  └─ download_data.py      # dataset layout verifier
 ├─ tests/                   # pytest suite (CPU + gpu/trt-marked)
 └─ docker/Dockerfile.trt    # NVIDIA CUDA + TRT image for deployment
 ```
@@ -159,13 +169,25 @@ still auto-detected for older user setups.
 ### 3. Train
 
 ```bash
+# Default profile — MSRB only, RTX 3050, 256 px crops:
 uv run python scripts/train.py
+
+# RTX A3000 profile — 384 px crops, larger batches, fills 6 GB VRAM:
+uv run python scripts/train.py train=rtx_a3000_bf16 data=combined_a3000
 ```
 
 This composes `configs/default.yaml` (model=`legion_desnow_s`,
 data=`combined`, train=`rtx3050_bf16`).
 
-Override anything from the CLI:
+Resume an interrupted run (restores optimizer state + epoch counter):
+
+```bash
+uv run python scripts/train.py train=rtx_a3000_bf16 \
+  run_name=<timestamp> \
+  resume_from=outputs/<timestamp>/ckpts/last.ckpt
+```
+
+Override individual hyperparameters:
 
 ```bash
 uv run python scripts/train.py \
@@ -185,19 +207,29 @@ uv run python scripts/train.py -m \
 
 ## Training
 
+Two hardware profiles are provided:
+
+| Profile            | Config                                     | GPU  | Image size | MSRB batch | LSUI batch | `torch.compile` |
+| ------------------ | ------------------------------------------ | ---- | ---------- | ---------- | ---------- | --------------- |
+| RTX 3050 (default) | `train=rtx3050_bf16`                       | 4 GB | 256 px     | 8          | 4          | enabled (Linux) |
+| RTX A3000          | `train=rtx_a3000_bf16 data=combined_a3000` | 6 GB | 384 px     | 16         | 8          | disabled¹       |
+
+¹ `torch.compile` requires Triton which is Linux-only; disabled automatically on Windows. Re-enable in a Linux container.
+
 | Knob            | Default                                               | Where                                |
 | --------------- | ----------------------------------------------------- | ------------------------------------ |
-| Mixed precision | `bf16-mixed`                                          | `configs/train/rtx3050_bf16.yaml`    |
+| Mixed precision | `bf16-mixed`                                          | `configs/train/*.yaml`               |
 | Optimiser       | AdamW (`lr=3e-4`, `wd=1e-4`)                          | same                                 |
 | Schedule        | OneCycleLR (cosine)                                   | same                                 |
-| Batch size      | 16 (MSRB) / 8 (LSUI)                                  | `configs/data/*.yaml`                |
 | EMA decay       | 0.9995                                                | same                                 |
-| `torch.compile` | `reduce-overhead` (auto-disabled for export)          | same                                 |
 | Channels-last   | on                                                    | `configs/model/legion_desnow_s.yaml` |
 | Backbone freeze | first 2 epochs                                        | same                                 |
 | Loss weights    | `λ_rec=1, λ_phys=0.5, λ_ssim=0.5, λ_tv=1e-2, λ_t=0.5` | same                                 |
 
-Logs go to TensorBoard by default; W&B if `WANDB_API_KEY` is set.
+Checkpoints are saved to `outputs/<timestamp>/ckpts/`. The three best
+`val/psnr` checkpoints and `last.ckpt` are always kept. Logs go to
+TensorBoard and W&B (W&B credentials read from `~/_netrc` or
+`WANDB_API_KEY`).
 
 ## Evaluation
 
@@ -253,6 +285,38 @@ Reports per-image and aggregate statistics for:
 | Repeatability I→Ĵ              | Are scene points re-detected after enhancement? |
 | Match inlier ratio I→Ĵ         | RANSAC-verified geometric consistency           |
 | Match score                    | Descriptor confidence (lower = sharper matches) |
+
+## Camera / live video inference
+
+Run the model on a webcam or video file in real time. Displays a
+side-by-side (Raw | Enhanced) window with per-frame latency overlay.
+
+```bash
+# Webcam (device 0)
+uv run python scripts/infer_camera.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt
+
+# Video file
+uv run python scripts/infer_camera.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --source path/to/footage.mp4
+
+# Resize to 512 px shorter edge before inference (higher FPS on low-end GPUs)
+uv run python scripts/infer_camera.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --resize 512
+
+# Save side-by-side MP4 without opening a window
+uv run python scripts/infer_camera.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --source footage.mp4 --save out.mp4 --no-display
+```
+
+Expected throughput on the RTX A3000 (BF16, native resolution 1080 p): ~20–30 FPS.
+With `--resize 512`: ~60+ FPS.
+
+> For ROS2 integration (Humble / Jazzy) see `src/aquaclr/ros2/ros2_node.py` and
+> [`docs/DEPLOYMENT_FEDORA.md`](docs/DEPLOYMENT_FEDORA.md).
 
 ## Export to TensorRT
 

@@ -1,21 +1,31 @@
 """Hydra-driven training entry point.
 
 Examples:
-    Train with the default profile (MSRB+LSUI combined, RTX 3050 BF16)::
+    Train with the default profile (MSRB-only, RTX 3050 BF16, 256 px crops)::
 
-        python scripts/train.py
+        uv run python scripts/train.py
 
-    Override at the CLI::
+    Train on the RTX A3000 with the A3000-tuned data config (384 px, batch 16/8)::
 
-        python scripts/train.py data=msrb train.max_epochs=20 train.optimizer.lr=1e-4
+        uv run python scripts/train.py train=rtx_a3000_bf16 data=combined_a3000
+
+    Override individual hyperparameters at the CLI::
+
+        uv run python scripts/train.py train=rtx_a3000_bf16 train.max_epochs=40 train.optimizer.lr=1e-4
+
+    Resume an interrupted run (restores optimizer state + epoch counter)::
+
+        uv run python scripts/train.py train=rtx_a3000_bf16 \\
+            run_name=20260518-163016 \\
+            resume_from=outputs/20260518-163016/ckpts/last.ckpt
 
     Multirun sweep over learning rates::
 
-        python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3
+        uv run python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3
 
-        wandb API: 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
+    Set HYDRA_FULL_ERROR=1 for a full stack trace on config errors::
 
-        Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.
+        $env:HYDRA_FULL_ERROR=1; uv run python scripts/train.py train=rtx_a3000_bf16
 """
 
 from __future__ import annotations

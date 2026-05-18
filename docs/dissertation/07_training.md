@@ -2,38 +2,50 @@
 
 > **Learning objectives**
 > By the end of this chapter you will be able to:
-> 1. Reproduce a training run end-to-end on an RTX 3050.
+>
+> 1. Reproduce a training run end-to-end on an RTX 3050 or RTX A3000.
 > 2. Justify every hyper-parameter choice (precision, optimiser, schedule, EMA decay).
 > 3. Explain why backbone-freezing for the first epochs is essential here.
 > 4. Read a TensorBoard / W&B dashboard to spot the four canonical training failure modes.
 >
 > **TL;DR.** AdamW (`lr=3e-4`, `wd=1e-4`) + OneCycleLR with cosine
-> decay, BF16 mixed precision, gradient accumulation `=2` for an
-> effective batch ≥ 32, EMA `(decay=0.9995)` on the parameters,
-> backbone frozen for the first 2 epochs, gradient clip at norm 1,
-> 60 max epochs with early-stopping on `val/psnr` (patience 12).
+> decay, BF16 mixed precision, gradient accumulation `=1` (A3000) or
+> `=2` (3050) for an effective batch ≥ 16, EMA `(decay=0.9995)` on the
+> parameters, backbone frozen for the first 2 epochs, gradient clip at
+> norm 1, 60 max epochs with early-stopping on `val/psnr` (patience 12).
+> Observed best: **val/psnr = 36.91 dB** at epoch 18 on RTX A3000.
 
 ## 7.1 Hardware setup
 
-The reference machine is a **single workstation** with the
-following spec:
+Two hardware configurations are supported out of the box:
 
-| Component | Value |
-| --- | --- |
-| CPU | 6+ cores recommended (AMD Ryzen 7 / Intel i7) |
-| RAM | ≥ 32 GB (LSUI's transmission maps are memory-hungry while augmenting) |
-| GPU | NVIDIA RTX 3050, 4 GB VRAM (Ampere) |
-| OS | Fedora 44 (host); training is OS-independent |
-| Drivers | NVIDIA ≥ 555 (CUDA 12.4+ runtime via PyTorch) |
-| Storage | NVMe SSD (the augmentation pipeline is I/O-bound at small batches) |
+| Component | Minimum (RTX 3050)                            | Development machine (RTX A3000)                      |
+| --------- | --------------------------------------------- | ---------------------------------------------------- |
+| CPU       | 6+ cores (Ryzen 7 / i7)                       | Intel i7-11850H, 8C / 16T                            |
+| RAM       | ≥ 16 GB                                       | 32 GB                                                |
+| GPU       | NVIDIA RTX 3050, 4 GB VRAM (Ampere)           | NVIDIA RTX A3000 Laptop, 6 GB VRAM (Ampere SM 8.6)   |
+| OS        | Any (Linux recommended for `torch.compile`)   | Windows 11 (training) / Linux container (TRT export) |
+| Drivers   | NVIDIA ≥ 555 (CUDA 12.4+ runtime via PyTorch) | same                                                 |
+| Storage   | NVMe SSD (augmentation pipeline is I/O-bound) | same                                                 |
 
-This is the *minimum*. On larger GPUs (e.g. RTX 3090 24 GB) the
-batch size and crop resolution can be raised proportionally with
-no further code changes.
+On larger GPUs (e.g. RTX 3090 24 GB) the batch size and crop
+resolution can be raised proportionally with no further code changes.
 
-## 7.2 The training profile
+## 7.2 Training profiles
 
-Defined entirely in
+Two YAML profiles ship with the repo:
+
+| Profile                  | File                                | GPU target     | Image size | Batch (MSRB/LSUI) | `accum_grad` | `torch.compile` |
+| ------------------------ | ----------------------------------- | -------------- | ---------- | ----------------- | ------------ | --------------- |
+| `rtx3050_bf16` (default) | `configs/train/rtx3050_bf16.yaml`   | RTX 3050 4 GB  | 256 px     | 8 / 4             | 2            | enabled (Linux) |
+| `rtx_a3000_bf16`         | `configs/train/rtx_a3000_bf16.yaml` | RTX A3000 6 GB | 384 px¹    | 16 / 8¹           | 1            | disabled²       |
+
+¹ When paired with `data=combined_a3000`; the default `data=combined` still uses 256 px / 8 / 4.
+² `torch.compile` uses the Triton backend which is Linux-only. Set `compile.enabled: true` when running inside a Linux container.
+
+### 7.2.1 The base profile (`rtx3050_bf16`)
+
+Defined in
 [`configs/train/rtx3050_bf16.yaml`](../../configs/train/rtx3050_bf16.yaml):
 
 ```yaml
@@ -69,9 +81,9 @@ loss:
 
 callbacks:
   early_stopping: { monitor: val/psnr, mode: max, patience: 12 }
-  checkpoint:    { monitor: val/psnr, mode: max, save_top_k: 3, save_last: true }
-  ema:           { enabled: true, decay: 0.9995 }
-  vram_monitor:  { enabled: true, every_n_steps: 50 }
+  checkpoint: { monitor: val/psnr, mode: max, save_top_k: 3, save_last: true }
+  ema: { enabled: true, decay: 0.9995 }
+  vram_monitor: { enabled: true, every_n_steps: 50 }
   sample_logger: { every_n_steps: 200, n_samples: 4 }
 
 trainer:
@@ -95,11 +107,11 @@ The rest of this chapter walks each block and explains why.
 
 ### 7.3.1 Why AdamW (not SGD or plain Adam)
 
-| Choice | When it wins | Why not for us |
-| --- | --- | --- |
-| SGD-momentum | Large datasets (ImageNet), well-tuned | Sensitive on small (~3 K-image) datasets; needs careful LR warmup |
-| Adam | Same as AdamW but with L2 regularisation merged into gradient | The merged regularisation interacts badly with LR schedules [Loshchilov 2019] |
-| **AdamW** | Decoupled weight decay; modern default for vision | **Chosen.** |
+| Choice       | When it wins                                                  | Why not for us                                                                |
+| ------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| SGD-momentum | Large datasets (ImageNet), well-tuned                         | Sensitive on small (~3 K-image) datasets; needs careful LR warmup             |
+| Adam         | Same as AdamW but with L2 regularisation merged into gradient | The merged regularisation interacts badly with LR schedules [Loshchilov 2019] |
+| **AdamW**    | Decoupled weight decay; modern default for vision             | **Chosen.**                                                                   |
 
 ### 7.3.2 LR = 3e-4 (the "Karpathy constant")
 
@@ -141,7 +153,7 @@ flowchart LR
 ### 7.4.2 Why not OneCycleLR's super-convergence regime
 
 The original OneCycleLR paper [Smith 2018] uses
-`final_div_factor = 1e4` *and* `pct_start = 0.3` to enable
+`final_div_factor = 1e4` _and_ `pct_start = 0.3` to enable
 "super-convergence". We use a more conservative `pct_start = 0.1`
 because the network has a pretrained backbone that doesn't need a
 long warmup.
@@ -153,11 +165,11 @@ long warmup.
 The RTX 3050 is Ampere; Ampere supports **native BF16**. The
 trade-off:
 
-| Format | Mantissa bits | Exponent bits | Range | Implication |
-| --- | --- | --- | --- | --- |
-| FP32 | 23 | 8 | huge | Default |
-| FP16 | 10 | 5 | small (~6.5e4) | Risk of overflow on losses with squared terms; needs `GradScaler` |
-| **BF16** | **7** | **8** | **same as FP32** | **No overflow risk; loss landscape preserved; no GradScaler needed** |
+| Format   | Mantissa bits | Exponent bits | Range            | Implication                                                          |
+| -------- | ------------- | ------------- | ---------------- | -------------------------------------------------------------------- |
+| FP32     | 23            | 8             | huge             | Default                                                              |
+| FP16     | 10            | 5             | small (~6.5e4)   | Risk of overflow on losses with squared terms; needs `GradScaler`    |
+| **BF16** | **7**         | **8**         | **same as FP32** | **No overflow risk; loss landscape preserved; no GradScaler needed** |
 
 BF16 sacrifices precision (7 bit mantissa vs 10 bit FP16) but
 preserves the FP32 dynamic range, which is what matters for
@@ -269,12 +281,12 @@ on the raw weights.
 
 ```yaml
 early_stopping: { monitor: val/psnr, mode: max, patience: 12 }
-checkpoint:    { monitor: val/psnr, mode: max, save_top_k: 3, save_last: true }
+checkpoint: { monitor: val/psnr, mode: max, save_top_k: 3, save_last: true }
 ```
 
 - **Early stopping**: if `val/psnr` doesn't improve for 12
   consecutive validation epochs, training halts.
-- **Top-3 checkpoints**: we keep the three best by `val/psnr` *and*
+- **Top-3 checkpoints**: we keep the three best by `val/psnr` _and_
   always the last (so a crashed run can be resumed).
 - **Why not val/loss**: PSNR is monotone in the perceptually
   meaningful objective; loss is a weighted sum that can decrease
@@ -296,7 +308,7 @@ forward+backward, fuses kernels, and caches the result. We see
 We use **`reduce-overhead`** rather than `max-autotune` because:
 
 - `max-autotune` benchmarks multiple kernel choices, which is slow
-  the first epoch and *re-runs on shape changes*. Our DataLoader
+  the first epoch and _re-runs on shape changes_. Our DataLoader
   varies shapes when the batch is the last (smaller) batch of an
   epoch.
 - `reduce-overhead` only fuses what's safe; the first epoch is
@@ -336,15 +348,15 @@ prefix-stripping convention in [`scripts/export_onnx.py`](../../scripts/export_o
 
 ## 7.13 Logging — what shows up where
 
-| Metric / artefact | TensorBoard | W&B (if enabled) | Console |
-| --- | --- | --- | --- |
-| `train/loss/{total,recon,phys,ssim,tv,t_sup}` | ✓ | ✓ | every 25 steps |
-| `train/{psnr,ssim}` | ✓ | ✓ | every epoch |
-| `val/{psnr,ssim,loss/...}` | ✓ | ✓ | every epoch |
-| `lr` | ✓ | ✓ | every 25 steps |
-| `perf/vram_peak_mb` | ✓ | ✓ | every 50 steps |
-| sample image grid | ✓ | ✓ | every 200 steps |
-| model summary at start | ✓ | ✓ | once |
+| Metric / artefact                             | TensorBoard | W&B (if enabled) | Console           |
+| --------------------------------------------- | ----------- | ---------------- | ----------------- |
+| `train/loss/{total,recon,phys,ssim,tv,t_sup}` | ✓           | ✓                | every 20–25 steps |
+| `train/{psnr,ssim}`                           | ✓           | ✓                | every epoch       |
+| `val/{psnr,ssim,loss/...}`                    | ✓           | ✓                | every epoch       |
+| `lr`                                          | ✓           | ✓                | every 20–25 steps |
+| `perf/vram_peak_mb`                           | ✓           | ✓                | every 50 steps    |
+| sample image grid                             | ✓           | ✓                | every 200 steps   |
+| model summary at start                        | ✓           | ✓                | once              |
 
 If `WANDB_API_KEY` is unset, Lightning silently skips W&B and
 TensorBoard becomes the only sink — that is the default for CI and
@@ -352,79 +364,82 @@ for headless ROV deployments.
 
 ## 7.14 Worked-example training trajectory
 
-A typical run on an RTX 3050 looks like:
+The following is from an actual run on the RTX A3000 (`train=rtx_a3000_bf16`,
+`data=combined` 256 px, MSRB Task 1, 30 epochs before early stopping):
 
 ```
-Epoch  0:  val/psnr 18.4   train/loss/total 0.62
-Epoch  1:  val/psnr 21.1   train/loss/total 0.41
-Epoch  2:  val/psnr 22.8   train/loss/total 0.32      <-- backbone unfrozen here
-Epoch  5:  val/psnr 24.3   train/loss/total 0.23
-Epoch 10:  val/psnr 25.1   train/loss/total 0.18
-Epoch 20:  val/psnr 25.8   train/loss/total 0.15
-Epoch 35:  val/psnr 26.1   train/loss/total 0.13      <-- best so far
-Epoch 50:  val/psnr 26.0   (still within early-stop patience)
-Epoch 60:  val/psnr 25.9   (max_epochs reached, stop)
+Epoch  0:  val/psnr ~28–30    val/ssim ~0.78   (backbone frozen)
+Epoch  2:  val/psnr ~32       val/ssim ~0.80   <-- backbone unfrozen
+Epoch 13:  val/psnr 36.30     val/ssim 0.836
+Epoch 14:  val/psnr 36.60     val/ssim 0.833
+Epoch 18:  val/psnr 36.91     val/ssim ~0.84   <-- best checkpoint
+Epoch 30:  val/psnr 35.90     val/ssim 0.773   (early-stop fires at ~18+patience)
 ```
 
-The exact numbers will differ; the **shape** of the curve is the
-sanity check.
+The **shape** of the curve matters more than the exact numbers:
+
+- A rapid rise in the first 2 epochs (heads learning with frozen backbone).
+- An acceleration at epoch 2 when the backbone unfreezes.
+- A peak typically between epochs 15–25 depending on dataset size and profile.
+- EMA weights consistently beat the bare weights by ~0.2–0.4 dB on `val/psnr`.
+
+With `data=combined_a3000` (384 px crops) expect a further +0.5–1 dB gain.
 
 ## 7.15 The four canonical training failure modes
 
 A trained eye spots these on TensorBoard within minutes:
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `val/psnr` stuck < 20 dB after 5 epochs | Backbone never unfreezing or LR too low | Check freeze schedule; verify scheduler is OneCycleLR |
-| `train/loss/tv` decreasing while `val/psnr` decreasing | TV weight too high — `t` washing out to constant | Reduce `λ_tv` (default `1e-2`) by 10× |
-| `train/loss/phys` ≪ `train/loss/recon` for too long | Network is satisfying recon at any `(t, B)` factorisation | Increase `λ_phys` to 1.0 temporarily and verify |
-| `perf/vram_peak_mb` creeping up over time | Likely a leak in a callback (probably custom user code) | Check that no callback retains references to whole-batch tensors |
+| Symptom                                                | Likely cause                                              | Fix                                                              |
+| ------------------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------- |
+| `val/psnr` stuck < 20 dB after 5 epochs                | Backbone never unfreezing or LR too low                   | Check freeze schedule; verify scheduler is OneCycleLR            |
+| `train/loss/tv` decreasing while `val/psnr` decreasing | TV weight too high — `t` washing out to constant          | Reduce `λ_tv` (default `1e-2`) by 10×                            |
+| `train/loss/phys` ≪ `train/loss/recon` for too long    | Network is satisfying recon at any `(t, B)` factorisation | Increase `λ_phys` to 1.0 temporarily and verify                  |
+| `perf/vram_peak_mb` creeping up over time              | Likely a leak in a callback (probably custom user code)   | Check that no callback retains references to whole-batch tensors |
 
 ## 7.16 How to actually run a training session
 
 ```bash
-# (host, with .venv active)
-cd ~/aquaclr
-source .venv/bin/activate
+# Default: MSRB only, 256 px, RTX 3050 BF16 profile
+uv run python scripts/train.py
 
-# Defaults: combined data, RTX 3050 BF16 profile.
-python scripts/train.py
+# RTX A3000: 384 px crops, larger batches, fills 6 GB VRAM
+uv run python scripts/train.py train=rtx_a3000_bf16 data=combined_a3000
 
-# Override anything via CLI.
-python scripts/train.py \
+# Override individual hyperparameters
+uv run python scripts/train.py \
     data=msrb \
     train.max_epochs=40 \
     train.optimizer.lr=2e-4 \
     train.callbacks.ema.decay=0.999
 
-# Multirun sweep (Hydra).
-python scripts/train.py -m \
+# Resume an interrupted run
+uv run python scripts/train.py train=rtx_a3000_bf16 \
+    run_name=20260518-163016 \
+    resume_from=outputs/20260518-163016/ckpts/last.ckpt
+
+# Multirun sweep (Hydra)
+uv run python scripts/train.py -m \
     train.optimizer.lr=1e-4,3e-4,1e-3 \
     train.loss.lambda_phys=0.25,0.5,1.0
+
+# Windows: set HYDRA_FULL_ERROR for full config tracebacks
+$env:HYDRA_FULL_ERROR=1; uv run python scripts/train.py train=rtx_a3000_bf16
 ```
 
 Outputs land at `outputs/<timestamp>/`:
 
 ```
-outputs/20260509-104233/
+outputs/20260518-163016/
 ├─ logs/tb/                     # TensorBoard
 ├─ ckpts/                       # checkpoint files
 ├─ .hydra/config.yaml           # frozen resolved config
-└─ wandb/                       # W&B run dir if enabled
+└─ logs/wandb/                   # W&B run dir if enabled
 ```
-
-To resume from a crash:
-
-```bash
-python scripts/train.py +ckpt_path=outputs/<run>/ckpts/last.ckpt
-```
-
-(handled by Lightning's auto-resume).
 
 ## 7.17 Determinism considerations
 
 `seed_everything(1337, deterministic=True)` makes everything
-deterministic *up to* the things PyTorch / cuDNN cannot make
+deterministic _up to_ the things PyTorch / cuDNN cannot make
 deterministic without a 30 % slowdown:
 
 - **DataLoader worker order**: deterministic if `num_workers > 0`
@@ -437,12 +452,12 @@ deterministic without a 30 % slowdown:
 
 ## 7.18 Estimated wall-clock and resource cost
 
-| Phase | Wall-clock (RTX 3050) | VRAM peak (256² training) | Disk (per run) |
-| --- | --- | --- | --- |
-| Backbone-frozen warmup (epochs 0-1) | ~6 min | ~2.0 GB | — |
-| Full training (epochs 2-60) | ~10–11 hours | ~2.6 GB | ~120 MB checkpoints + logs |
-| Early-stopped (typical) | ~6–8 hours | same | same |
-| Total to first deployable engine | **< 12 hours** | — | **~150 MB** |
+| Phase                               | Wall-clock (RTX 3050) | VRAM peak (256² training) | Disk (per run)             |
+| ----------------------------------- | --------------------- | ------------------------- | -------------------------- |
+| Backbone-frozen warmup (epochs 0-1) | ~6 min                | ~2.0 GB                   | —                          |
+| Full training (epochs 2-60)         | ~10–11 hours          | ~2.6 GB                   | ~120 MB checkpoints + logs |
+| Early-stopped (typical)             | ~6–8 hours            | same                      | same                       |
+| Total to first deployable engine    | **< 12 hours**        | —                         | **~150 MB**                |
 
 This means a complete dissertation experiment can be run **on a
 single laptop overnight**.
