@@ -47,7 +47,7 @@ loss:
   lambda_phys: 0.5
   lambda_ssim: 0.5
   lambda_tv: 1.0e-2
-  lambda_t: 0.5            # used only when t_gt is present
+  lambda_t: 0.5 # used only when t_gt is present
   charbonnier: true
   ssim_window: 11
 
@@ -82,6 +82,8 @@ trainer:
   enable_progress_bar: true
 
 compile:
-  enabled: true
-  mode: reduce-overhead   # safe default for small models on Ampere; MSVC must be on PATH
+  # torch.compile / Inductor requires Triton, which is Linux-only.
+  # Disabled on Windows; re-enable when running inside a Linux container.
+  enabled: false
+  mode: reduce-overhead
   fullgraph: false
