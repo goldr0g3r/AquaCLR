@@ -2,6 +2,7 @@
 
 > **Learning objectives**
 > By the end of this chapter you will be able to:
+>
 > 1. Define every evaluation metric used (PSNR, SSIM, UIQM, UCIQE, latency, VRAM).
 > 2. Decide which metric to apply on which dataset and why.
 > 3. Run the full evaluation suite end-to-end against a checkpoint.
@@ -18,20 +19,24 @@
 
 ## 8.1 Metric design — what we measure and why
 
-| Family | Metric | Where | Range | Tells us |
-| --- | --- | --- | --- | --- |
-| Reference-based | **PSNR** | MSRB-test, LSUI-val | dB (≈18-35 typical) | How close `Ĵ` is to `J_gt` pixel-wise |
-| Reference-based | **SSIM** | MSRB-test, LSUI-val | [-1, 1] | Local structural agreement |
-| No-reference | **UIQM** | UIEB-Challenge | unbounded, higher better | Generic "underwater goodness" |
-| No-reference | **UCIQE** | UIEB-Challenge | unbounded, higher better | Colour balance / saturation |
-| Operational | **latency p50/p95** | RTX 3050 + TRT FP16 | ms / frame | Hits the < 15 ms budget? |
-| Operational | **FPS** | same | frames / s | Throughput |
-| Operational | **VRAM peak** | same | MB | Hits the < 1 GB run-time budget? |
-| Physics | **forward residual** | MSRB-val | mean abs in [0, 1] | `||I − F(J_gt, t̂, B̂)||₁` |
-| Physics | **t-smoothness** | MSRB-val | mean abs | `mean(|∇t̂|)`, anisotropic |
+| Family          | Metric                 | Where                        | Range                    | Tells us                                      |
+| --------------- | ---------------------- | ---------------------------- | ------------------------ | --------------------------------------------- | --- | ----------------- | --- | --- |
+| Reference-based | **PSNR**               | MSRB-test, LSUI-val          | dB (≈18-35 typical)      | How close `Ĵ` is to `J_gt` pixel-wise         |
+| Reference-based | **SSIM**               | MSRB-test, LSUI-val          | [-1, 1]                  | Local structural agreement                    |
+| No-reference    | **UIQM**               | UIEB-Challenge (+ MSRB-test) | unbounded, higher better | Generic "underwater goodness"                 |
+| No-reference    | **UCIQE**              | UIEB-Challenge (+ MSRB-test) | unbounded, higher better | Colour balance / saturation                   |
+| Operational     | **latency p50/p95**    | RTX 3050 + TRT FP16          | ms / frame               | Hits the < 15 ms budget?                      |
+| Operational     | **FPS**                | same                         | frames / s               | Throughput                                    |
+| Operational     | **VRAM peak**          | same                         | MB                       | Hits the < 1 GB run-time budget?              |
+| Physics         | **forward residual**   | MSRB-val                     | mean abs in [0, 1]       | `                                             |     | I − F(J_gt, t̂, B̂) |     | ₁`  |
+| Physics         | **t-smoothness**       | MSRB-val                     | mean abs                 | `mean(                                        | ∇t̂  | )`, anisotropic   |
+| SLAM downstream | **KP count Δ**         | MSRB-test                    | %                        | More features after enhancement?              |
+| SLAM downstream | **Repeatability**      | MSRB-test                    | [0, 1]                   | Scene points re-detected after enhancement    |
+| SLAM downstream | **Match inlier ratio** | MSRB-test                    | [0, 1]                   | RANSAC-verified geometric consistency (I → Ĵ) |
+| SLAM downstream | **Match score**        | MSRB-test                    | Hamming or L2            | Descriptor confidence (lower = sharper)       |
 
 We deliberately **pre-register** these metrics in this dissertation
-*before* running the experiments in Chapter 10. This protects
+_before_ running the experiments in Chapter 10. This protects
 against post-hoc cherry-picking.
 
 ## 8.2 PSNR — peak signal-to-noise ratio
@@ -55,11 +60,11 @@ across batches, and emits a single number per validation epoch.
 
 ### 8.2.3 What PSNR is good and bad at
 
-| Good | Bad |
-| --- | --- |
-| Cheap to compute | Insensitive to local structure (a uniformly-shifted image scores the same as a destroyed one of the same MSE) |
-| Comparable across papers (universal definition) | Saturates: 30+ dB looks identical to the eye despite mathematical difference |
-| Convex in pixel space | Penalises bright outliers quadratically (heavy-tail issue) |
+| Good                                            | Bad                                                                                                           |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Cheap to compute                                | Insensitive to local structure (a uniformly-shifted image scores the same as a destroyed one of the same MSE) |
+| Comparable across papers (universal definition) | Saturates: 30+ dB looks identical to the eye despite mathematical difference                                  |
+| Convex in pixel space                           | Penalises bright outliers quadratically (heavy-tail issue)                                                    |
 
 ## 8.3 SSIM — structural similarity
 
@@ -131,15 +136,29 @@ underwater literature, not as ground truth. We deliberately report
 ### 8.4.4 Implementation choice
 
 We use [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch) (PyTorch
-implementations of both), as an *optional* dependency. Snippet:
+implementations of both), as an _optional_ dependency. Install with:
+
+```bash
+pip install pyiqa
+```
+
+The metrics are integrated in [`scripts/evaluate.py`](../../scripts/evaluate.py)
+behind the `--no-ref` flag, which is silently skipped if `pyiqa` is not
+installed. The relevant code pattern (BCHW float `[0, 1]` tensors):
 
 ```python
-import pyiqa, torch
-uiqm = pyiqa.create_metric("uiqm").to(device)
-uciqe = pyiqa.create_metric("uciqe").to(device)
-score_uiqm = uiqm(j_pred_uint8.permute(0, 3, 1, 2).float() / 255.0)
-score_uciqe = uciqe(j_pred_uint8.permute(0, 3, 1, 2).float() / 255.0)
+import pyiqa
+_uiqm_metric = pyiqa.create_metric("uiqm", device=device)
+_uciqe_metric = pyiqa.create_metric("uciqe", device=device)
+
+# j_pred: (B, C, H, W) float32 in [0, 1] — no uint8 conversion needed
+scores_uiqm = _uiqm_metric(j_pred.clamp(0.0, 1.0))   # → Tensor (B,)
+scores_uciqe = _uciqe_metric(j_pred.clamp(0.0, 1.0))  # → Tensor (B,)
 ```
+
+We report `mean ± std` over all images in the test set. Unlike PSNR/SSIM,
+no ground-truth image is required — UIQM/UCIQE can therefore be applied
+on held-out unpaired sets such as UIEB-Challenge.
 
 ## 8.5 Operational metrics — latency, throughput, VRAM
 
@@ -147,11 +166,11 @@ score_uciqe = uciqe(j_pred_uint8.permute(0, 3, 1, 2).float() / 255.0)
 
 We report three latency statistics over `n_iter = 200` warmed-up runs:
 
-| Statistic | Definition |
-| --- | --- |
-| **p50** | 50th percentile (median) inference time |
-| **p95** | 95th percentile — captures tail latency |
-| **mean** | Arithmetic mean — for reproducibility with prior literature |
+| Statistic | Definition                                                  |
+| --------- | ----------------------------------------------------------- |
+| **p50**   | 50th percentile (median) inference time                     |
+| **p95**   | 95th percentile — captures tail latency                     |
+| **mean**  | Arithmetic mean — for reproducibility with prior literature |
 
 Implementation: [`src/aquaclr/inference/benchmark.py::benchmark_pytorch`](../../src/aquaclr/inference/benchmark.py).
 For TRT we replicate the same harness against a `TensorRTRunner`
@@ -221,22 +240,22 @@ similar scenes, the head has not learned a useful prior.
 Each ablation **removes or swaps one component** at a time and
 reports the delta on every metric. The full plan:
 
-| ID | Ablation | What changes |
-| --- | --- | --- |
-| **A0** | Baseline (full system) | — |
-| A1 | `λ_phys = 0` | Drop forward-consistency loss |
-| A2 | `λ_ssim = 0` | Drop SSIM loss |
-| A3 | `λ_tv = 0` | Drop TV regulariser on `t` |
-| A4 | `λ_t = 0` | Drop direct `t` supervision (LSUI batches still train recon+phys+ssim+tv) |
-| A5 | EMA off | `EMAWeightCallback` disabled |
-| A6 | `precision = "16-mixed"` | FP16 instead of BF16 |
-| A7 | `compile.enabled = false` | No `torch.compile` |
-| A8 | MSRB-only | `data=msrb` (no LSUI) |
-| A9 | LSUI-only | `data=lsui` |
-| A10 | Mix 50/50 | `mix_ratio = (0.5, 0.5)` |
-| A11 | Backbone-from-scratch | `pretrained: false` |
-| A12 | No backbone freeze | `freeze_backbone_epochs: 0` |
-| A13 | Per-channel `t` (oracle) | swap t-head to 3-channel; needs net change — sketch only |
+| ID     | Ablation                  | What changes                                                              |
+| ------ | ------------------------- | ------------------------------------------------------------------------- |
+| **A0** | Baseline (full system)    | —                                                                         |
+| A1     | `λ_phys = 0`              | Drop forward-consistency loss                                             |
+| A2     | `λ_ssim = 0`              | Drop SSIM loss                                                            |
+| A3     | `λ_tv = 0`                | Drop TV regulariser on `t`                                                |
+| A4     | `λ_t = 0`                 | Drop direct `t` supervision (LSUI batches still train recon+phys+ssim+tv) |
+| A5     | EMA off                   | `EMAWeightCallback` disabled                                              |
+| A6     | `precision = "16-mixed"`  | FP16 instead of BF16                                                      |
+| A7     | `compile.enabled = false` | No `torch.compile`                                                        |
+| A8     | MSRB-only                 | `data=msrb` (no LSUI)                                                     |
+| A9     | LSUI-only                 | `data=lsui`                                                               |
+| A10    | Mix 50/50                 | `mix_ratio = (0.5, 0.5)`                                                  |
+| A11    | Backbone-from-scratch     | `pretrained: false`                                                       |
+| A12    | No backbone freeze        | `freeze_backbone_epochs: 0`                                               |
+| A13    | Per-channel `t` (oracle)  | swap t-head to 3-channel; needs net change — sketch only                  |
 
 Each experiment is run with the **same seed** (1337), the same data
 splits, and the same hardware so deltas are attributable to the
@@ -257,21 +276,21 @@ trained models.
 
 ### 8.7.2 What we expect (pre-registration)
 
-| Ablation | Expected sign of `Δ val/PSNR` | Justification |
-| --- | --- | --- |
-| A1 (-L_phys) | **−** (small) | Recon dominates; physics term mostly affects `(t, B)` consistency |
-| A2 (-L_ssim) | **−** (clear) | SSIM is what guards SLAM-relevant edges |
-| A3 (-L_tv) | + on val PSNR, **−** on UIEB | TV hurts strict pixel fit but improves generalisation |
-| A4 (-L_t) | + on MSRB, **−** on UIEB | LSUI's `t_gt` improves generalisation, slightly hurts MSRB-val |
-| A5 (EMA off) | **−** (~0.3 dB) | Standard EMA effect |
-| A6 (FP16) | ≈ 0 if no overflow, big − if overflow | BF16 is safer |
-| A7 (no compile) | ≈ 0 on quality, **−** on training time | Compile is purely a speed lever |
-| A8 (MSRB only) | + on MSRB, **−** on UIEB | MSRB-only overfits its synth distribution |
-| A9 (LSUI only) | **−** (clear) | LSUI lacks discrete particulates |
-| A10 (50/50) | minor | Should be close to A0 |
-| A11 (no pretrain) | **−** (large) | ImageNet features matter |
-| A12 (no freeze) | **−** (small) | Backbone damaged by random head gradients early |
-| A13 (per-channel t) | ≈ 0 PSNR, **−** size | Doubles head params without visible benefit |
+| Ablation            | Expected sign of `Δ val/PSNR`          | Justification                                                     |
+| ------------------- | -------------------------------------- | ----------------------------------------------------------------- |
+| A1 (-L_phys)        | **−** (small)                          | Recon dominates; physics term mostly affects `(t, B)` consistency |
+| A2 (-L_ssim)        | **−** (clear)                          | SSIM is what guards SLAM-relevant edges                           |
+| A3 (-L_tv)          | + on val PSNR, **−** on UIEB           | TV hurts strict pixel fit but improves generalisation             |
+| A4 (-L_t)           | + on MSRB, **−** on UIEB               | LSUI's `t_gt` improves generalisation, slightly hurts MSRB-val    |
+| A5 (EMA off)        | **−** (~0.3 dB)                        | Standard EMA effect                                               |
+| A6 (FP16)           | ≈ 0 if no overflow, big − if overflow  | BF16 is safer                                                     |
+| A7 (no compile)     | ≈ 0 on quality, **−** on training time | Compile is purely a speed lever                                   |
+| A8 (MSRB only)      | + on MSRB, **−** on UIEB               | MSRB-only overfits its synth distribution                         |
+| A9 (LSUI only)      | **−** (clear)                          | LSUI lacks discrete particulates                                  |
+| A10 (50/50)         | minor                                  | Should be close to A0                                             |
+| A11 (no pretrain)   | **−** (large)                          | ImageNet features matter                                          |
+| A12 (no freeze)     | **−** (small)                          | Backbone damaged by random head gradients early                   |
+| A13 (per-channel t) | ≈ 0 PSNR, **−** size                   | Doubles head params without visible benefit                       |
 
 Chapter 10 reports actual deltas; matches between expected and
 measured signs validate the methodology.
@@ -280,12 +299,12 @@ measured signs validate the methodology.
 
 Beyond the held-out UIEB-Challenge eval, we additionally check:
 
-| Test | Hypothesis | Evidence form |
-| --- | --- | --- |
-| Train MSRB-Task-1, eval MSRB-Task-2 | Smaller particles transfer to larger | PSNR delta |
-| Train MSRB+LSUI, eval RUIE-UIQS | Generalises to a third real dataset | Qualitative + UIQM |
-| Train at 256², eval at 720p (no retrain) | Architecture is resolution-flexible | PSNR + UIQM |
-| Inject Gaussian noise on UIEB before inference | Robust to sensor noise | PSNR / UIQM curves vs noise σ |
+| Test                                           | Hypothesis                           | Evidence form                 |
+| ---------------------------------------------- | ------------------------------------ | ----------------------------- |
+| Train MSRB-Task-1, eval MSRB-Task-2            | Smaller particles transfer to larger | PSNR delta                    |
+| Train MSRB+LSUI, eval RUIE-UIQS                | Generalises to a third real dataset  | Qualitative + UIQM            |
+| Train at 256², eval at 720p (no retrain)       | Architecture is resolution-flexible  | PSNR + UIQM                   |
+| Inject Gaussian noise on UIEB before inference | Robust to sensor noise               | PSNR / UIQM curves vs noise σ |
 
 These are stretch tests; we report them descriptively rather than
 declare pass/fail thresholds.
@@ -294,14 +313,14 @@ declare pass/fail thresholds.
 
 The 15 ms target is composed of:
 
-| Stage | Budget (ms) | Implementation |
-| --- | --- | --- |
-| Frame I/O via cv_bridge | 1.5 | `bridge.imgmsg_to_cv2(msg, "rgb8")` |
-| HWC→CHW + normalize | 0.5 | NumPy stride trick + `astype(float32) / 255` |
-| Model inference (TRT FP16) | 11.0 | `TensorRTRunner.__call__` |
-| CHW→HWC + clip + uint8 | 0.5 | NumPy reshape + clip |
-| Frame I/O publish | 1.5 | `bridge.cv2_to_imgmsg` + `publisher.publish` |
-| **Total** | **15.0** | |
+| Stage                      | Budget (ms) | Implementation                               |
+| -------------------------- | ----------- | -------------------------------------------- |
+| Frame I/O via cv_bridge    | 1.5         | `bridge.imgmsg_to_cv2(msg, "rgb8")`          |
+| HWC→CHW + normalize        | 0.5         | NumPy stride trick + `astype(float32) / 255` |
+| Model inference (TRT FP16) | 11.0        | `TensorRTRunner.__call__`                    |
+| CHW→HWC + clip + uint8     | 0.5         | NumPy reshape + clip                         |
+| Frame I/O publish          | 1.5         | `bridge.cv2_to_imgmsg` + `publisher.publish` |
+| **Total**                  | **15.0**    |                                              |
 
 The benchmark harness measures only the inference component (the
 11 ms slice). End-to-end latency including I/O is reported in
@@ -354,7 +373,12 @@ done
 
 # 3. Evaluate on MSRB-test, LSUI-val, UIEB-Challenge.
 for ckpt in outputs/A*/ckpts/*.ckpt; do
+  # Reference-based (always)
   python scripts/evaluate.py --ckpt $ckpt --data-root data/msrb --split test --task 1
+  # No-reference (requires: pip install pyiqa)
+  python scripts/evaluate.py --ckpt $ckpt --data-root data/msrb --split test --task 1 --no-ref
+  # SLAM feature stability
+  python scripts/evaluate_slam_features.py --ckpt $ckpt --data-root data/msrb --split test --task 1
 done
 
 # 4. Latency benchmark (PyTorch + TRT).
@@ -368,14 +392,127 @@ run and which were extrapolated.
 
 ---
 
+## 8.13 Downstream SLAM feature stability benchmark
+
+> **Motivation.** PSNR and SSIM measure pixel-level fidelity. They do
+> not directly answer the operational question: _does LEGION-DeSnow
+> help SLAM?_ Marine snow fires keypoint detectors spuriously
+> (particle streaks look like corners). The SLAM Feature Stability
+> Benchmark answers this directly by comparing feature extractor
+> outputs before and after enhancement.
+
+### 8.13.1 Script
+
+[`scripts/evaluate_slam_features.py`](../../scripts/evaluate_slam_features.py)
+
+For each `(I, Ĵ, J_gt)` triple in MSRB-test, the script:
+
+1. Converts each tensor to grayscale uint8 (standard OpenCV input).
+2. Runs the chosen feature extractor on all three images.
+3. Computes the four metrics below.
+4. Aggregates `mean ± std` over the dataset and prints a summary
+   table.
+
+Dependencies: `opencv-python-headless` (always in core deps).
+SIFT requires `opencv-contrib-python`; the script auto-falls-back
+to ORB if SIFT is unavailable.
+
+### 8.13.2 Metrics defined
+
+**Keypoint count Δ (%)** — the percentage change in detected
+keypoints from raw `I` to enhanced `Ĵ`. Positive means the model
+reveals scene features hidden under marine-snow:
+
+$$
+\Delta_{kp} = \frac{N_{kp}(\hat{J}) - N_{kp}(I)}{N_{kp}(I)} \times 100
+$$
+
+**Repeatability (I→Ĵ)** — fraction of keypoints detected on `I`
+that are re-detected on `Ĵ` within `dist_thresh` pixels. Measures
+positional consistency under the enhancement transform:
+
+$$
+\mathrm{Rep} = \frac{|\{k \in \mathrm{KP}(I) : \exists k' \in \mathrm{KP}(\hat{J}),\; \|k - k'\| \le \delta\}|}{|\mathrm{KP}(I)|}
+$$
+
+where `δ = dist_thresh` (default 3 px).
+
+**Match inlier ratio (I→Ĵ)** — after mutual-nearest-neighbour
+descriptor matching with Lowe's ratio test (default `r = 0.75`),
+RANSAC-verified geometric inliers divided by post-ratio matches:
+
+$$
+\mathrm{MIR} = \frac{|\mathrm{RANSAC\ inliers}|}{|\mathrm{ratio\text{-}test\ matches}|}
+$$
+
+Since `I` and `Ĵ` depict the same scene, a well-behaved de-noiser
+should yield MIR close to 1 — i.e. SLAM would correctly associate
+the enhanced and raw frames.
+
+**Match score** — mean best-match descriptor distance among
+ratio-test-passing matches. Hamming distance for ORB, L2 for SIFT.
+Lower = more discriminative descriptors.
+
+### 8.13.3 Automotive SiL parallel
+
+This benchmark is the subsea analogue of a camera de-rain SiL
+quality gate in an ADAS stack: run ORB on raw rainy frames, on
+de-rained frames, and on GT-clean frames; compare feature yield and
+repeatability. The same harness is used to sign off sensor
+preprocessing blocks in ADAS SiL pipelines before downstream
+integration.
+
+### 8.13.4 Running the benchmark
+
+```bash
+# Default: ORB, 2000 features, dist_thresh=3 px, Lowe ratio=0.75
+uv run python scripts/evaluate_slam_features.py \
+    --ckpt outputs/<run>/ckpts/best.ckpt \
+    --data-root data/msrb --split test --task 1
+
+# SIFT with larger feature budget:
+uv run python scripts/evaluate_slam_features.py \
+    --ckpt outputs/<run>/ckpts/best.ckpt \
+    --data-root data/msrb \
+    --detector sift --n-features 1500 --dist-thresh 5
+```
+
+Example output:
+
+```
+========================================================================
+  SLAM Feature Stability Benchmark — LEGION-DeSnow
+========================================================================
+  Detector       : ORB  (nfeatures=2000)
+  Descriptor norm: Hamming
+  Dataset        : MSRB-test  task=1  n=400
+  Dist thresh    : 3.0 px  (repeatability)
+  Lowe ratio     : 0.75
+------------------------------------------------------------------------
+  Metric                            Raw I    Enhanced Ĵ    Clean J_gt
+------------------------------------------------------------------------
+  KP count (mean ± std)            354.2      512.4          601.3
+  KP count Δ vs Raw I                  —       +44.7%        +69.8% (oracle)
+------------------------------------------------------------------------
+  Repeatability  I → Ĵ                 —       68.1%              —
+  Match inlier ratio  I → Ĵ           —       63.4%              —
+  Match score (Hamming, I → Ĵ)        —        38.2              — (lower = better)
+========================================================================
+```
+
+---
+
 ## Key takeaways
 
-- We pre-register four metric families: **reference-based**
+- We pre-register **five** metric families: **reference-based**
   (PSNR, SSIM), **no-reference** (UIQM, UCIQE),
-  **operational** (latency, VRAM), and **physics-quality**
-  (forward residual, t-smoothness).
+  **operational** (latency, VRAM), **physics-quality**
+  (forward residual, t-smoothness), and **SLAM-downstream**
+  (keypoint count Δ, repeatability, match inlier ratio).
 - The right metric depends on the dataset: PSNR/SSIM on
-  MSRB-test, UIQM/UCIQE on UIEB-Challenge.
+  MSRB-test, UIQM/UCIQE on UIEB-Challenge, SLAM metrics on MSRB-test.
+- No-reference metrics (`--no-ref`) require `pip install pyiqa`;
+  they are silently skipped otherwise.
 - Latency / VRAM are reported on RTX 3050 at 720p in TRT FP16,
   including p50, p95, mean, FPS, and peak VRAM.
 - The ablation plan **changes one component at a time** (A1–A13)
@@ -387,5 +524,6 @@ run and which were extrapolated.
 
 - Forward to [Chapter 9 — Deployment](09_deployment.md)
 - Code: [`scripts/evaluate.py`](../../scripts/evaluate.py),
+  [`scripts/evaluate_slam_features.py`](../../scripts/evaluate_slam_features.py),
   [`src/aquaclr/inference/benchmark.py`](../../src/aquaclr/inference/benchmark.py)
 - Glossary entries: PSNR, SSIM, UIQM, UCIQE — see [Appendix B](B_glossary.md)

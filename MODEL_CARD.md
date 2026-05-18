@@ -73,16 +73,16 @@ official sources directly:
 
 ## Training procedure
 
-| Setting | Value |
-| --- | --- |
-| Optimiser | AdamW (`lr=3e-4`, `weight_decay=1e-4`, `betas=(0.9, 0.999)`) |
-| Scheduler | OneCycleLR (`pct_start=0.1`, cosine annealing) |
-| Precision | `bf16-mixed` (Ampere; native BF16 keeps loss landscape stable) |
-| Batch size | 16 (MSRB) / 8 (LSUI), `accumulate_grad_batches=2` |
-| Epochs | 60 (typical convergence ~40-50) |
-| Backbone freeze | First 2 epochs (heads warm-up) |
-| EMA decay | 0.9995 |
-| Augmentation | Albumentations: random crop, h-flip, mild colour-jitter on `I` only |
+| Setting         | Value                                                               |
+| --------------- | ------------------------------------------------------------------- |
+| Optimiser       | AdamW (`lr=3e-4`, `weight_decay=1e-4`, `betas=(0.9, 0.999)`)        |
+| Scheduler       | OneCycleLR (`pct_start=0.1`, cosine annealing)                      |
+| Precision       | `bf16-mixed` (Ampere; native BF16 keeps loss landscape stable)      |
+| Batch size      | 16 (MSRB) / 8 (LSUI), `accumulate_grad_batches=2`                   |
+| Epochs          | 60 (typical convergence ~40-50)                                     |
+| Backbone freeze | First 2 epochs (heads warm-up)                                      |
+| EMA decay       | 0.9995                                                              |
+| Augmentation    | Albumentations: random crop, h-flip, mild colour-jitter on `I` only |
 
 ## Loss
 
@@ -97,7 +97,8 @@ L = 1.0  · L_recon(J_pred, J_gt)            # Charbonnier
 ## Evaluation metrics
 
 - **Reference-based** (MSRB-test, LSUI-val): PSNR, SSIM
-- **No-reference** (UIEB-Challenge): UIQM, UCIQE (via `pyiqa`)
+- **No-reference** (UIEB-Challenge, MSRB-test): UIQM, UCIQE (via `pyiqa`; pass `--no-ref` to `evaluate.py`)
+- **SLAM downstream** (MSRB-test): keypoint count Δ, repeatability I→Ĵ, match inlier ratio, match score (via `evaluate_slam_features.py`)
 - **Latency** (RTX 3050, FP16, TRT): p50 / p95 / mean ms @ 720 p
 - **VRAM** (RTX 3050): peak MB
 

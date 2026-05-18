@@ -2,6 +2,7 @@
 
 > **Learning objectives**
 > By the end of this chapter you will be able to:
+>
 > 1. Locate any concept from Chapters 3–4 in the source tree within seconds.
 > 2. Explain why we use a `src/`-layout, Hydra configs, uv, ruff, and mypy strict.
 > 3. Reproduce the build, lint, type-check, and test cycle on a clean machine.
@@ -64,7 +65,8 @@ AquaCLR/
 │     └─ seed.py
 ├─ scripts/                 # thin CLI entry points
 │  ├─ train.py              # @hydra.main entrypoint
-│  ├─ evaluate.py           # PSNR/SSIM on test set
+│  ├─ evaluate.py           # PSNR/SSIM + optional UIQM/UCIQE (--no-ref)
+│  ├─ evaluate_slam_features.py  # ORB/SIFT keypoint stability benchmark
 │  ├─ export_onnx.py        # ONNX (+ optional TRT) export
 │  └─ download_data.py      # dataset layout verifier
 ├─ tests/                   # pytest suite
@@ -111,10 +113,10 @@ in order, this section is a guided tour of the codebase.
 
 [`src/aquaclr/models/model.py`](../../src/aquaclr/models/model.py)
 
-| Public symbol | Type | Role |
-| --- | --- | --- |
-| `LEGIONDeSnowNet` | `nn.Module` | The network |
-| `LEGIONOutputs` | `dataclass` | Carries `(j, t, b)` |
+| Public symbol     | Type        | Role                |
+| ----------------- | ----------- | ------------------- |
+| `LEGIONDeSnowNet` | `nn.Module` | The network         |
+| `LEGIONOutputs`   | `dataclass` | Carries `(j, t, b)` |
 
 Highlights:
 
@@ -151,11 +153,12 @@ through-pretrained weights.
 [`src/aquaclr/models/decoders/unet_dsc.py`](../../src/aquaclr/models/decoders/unet_dsc.py)
 
 Implements `DepthwiseSeparableConv` (3×3 depthwise + 1×1 pointwise
-+ BN + ReLU6, twice) and `UNetDSCDecoder` (4 up-blocks +
-final 2× upsample). The `_UpBlock.forward` defends against
-non-divisible spatial sizes by re-interpolating the upsampled
-tensor to the skip's shape — see [`tests/test_model.py`](../../tests/test_model.py)
-`test_handles_non_divisible_input`.
+
+- BN + ReLU6, twice) and `UNetDSCDecoder` (4 up-blocks +
+  final 2× upsample). The `_UpBlock.forward` defends against
+  non-divisible spatial sizes by re-interpolating the upsampled
+  tensor to the skip's shape — see [`tests/test_model.py`](../../tests/test_model.py)
+  `test_handles_non_divisible_input`.
 
 ### 5.2.4 `src/aquaclr/models/heads/transmission.py` & `backscatter.py`
 
@@ -179,11 +182,11 @@ the model.
 
 ### 5.2.6 `src/aquaclr/losses/`
 
-| File | Class / function | Lines |
-| --- | --- | --- |
-| `ssim.py` | `SSIM` (module), `ssim` (function), `psnr` (function) | ~150 |
-| `tv.py` | `total_variation` | ~40 |
-| `physics_loss.py` | `PhysicsInformedLoss`, `PhysicsLossOutputs` | ~180 |
+| File              | Class / function                                      | Lines |
+| ----------------- | ----------------------------------------------------- | ----- |
+| `ssim.py`         | `SSIM` (module), `ssim` (function), `psnr` (function) | ~150  |
+| `tv.py`           | `total_variation`                                     | ~40   |
+| `physics_loss.py` | `PhysicsInformedLoss`, `PhysicsLossOutputs`           | ~180  |
 
 The loss module returns a dataclass (`PhysicsLossOutputs`) with
 **every per-term value** as a separate scalar tensor in addition
@@ -193,14 +196,14 @@ TensorBoard / W&B expect.
 
 ### 5.2.7 `src/aquaclr/data/`
 
-| File | Purpose |
-| --- | --- |
-| `msrb_dataset.py` | MSRB Dataset + DataModule, with synth-snow fallback |
-| `lsui_dataset.py` | LSUI Dataset + DataModule, optional transmission GT |
-| `combined_datamodule.py` | Mix MSRB and LSUI per-batch; LSUI is optional |
-| `snow_synthesis.py` | Procedural marine-snow renderer (NumPy) |
-| `transforms.py` | Albumentations train/val pipelines |
-| `download.py` | MD5-verified streaming downloader |
+| File                     | Purpose                                             |
+| ------------------------ | --------------------------------------------------- |
+| `msrb_dataset.py`        | MSRB Dataset + DataModule, with synth-snow fallback |
+| `lsui_dataset.py`        | LSUI Dataset + DataModule, optional transmission GT |
+| `combined_datamodule.py` | Mix MSRB and LSUI per-batch; LSUI is optional       |
+| `snow_synthesis.py`      | Procedural marine-snow renderer (NumPy)             |
+| `transforms.py`          | Albumentations train/val pipelines                  |
+| `download.py`            | MD5-verified streaming downloader                   |
 
 The combined module's `_AlternatingLoader` pulls one batch from one
 loader at a time, sampled by `mix_ratio`. This is simpler than
@@ -210,10 +213,10 @@ term per-batch without per-sample masking inside.
 
 ### 5.2.8 `src/aquaclr/training/`
 
-| File | Class | Role |
-| --- | --- | --- |
-| `lit_module.py` | `LEGIONDeSnowLitModule` | Lightning wrapper |
-| `callbacks.py` | `EMAWeightCallback`, `VRAMMonitor`, `SampleImageLogger` | Cross-cutting concerns |
+| File            | Class                                                   | Role                   |
+| --------------- | ------------------------------------------------------- | ---------------------- |
+| `lit_module.py` | `LEGIONDeSnowLitModule`                                 | Lightning wrapper      |
+| `callbacks.py`  | `EMAWeightCallback`, `VRAMMonitor`, `SampleImageLogger` | Cross-cutting concerns |
 
 The Lightning module's `_shared_step` covers both train and val
 modes; the only difference is which TorchMetrics object is updated
@@ -226,11 +229,11 @@ batch.
 
 ### 5.2.9 `src/aquaclr/inference/`
 
-| File | Public surface |
-| --- | --- |
-| `onnx_export.py` | `export_to_onnx()` |
+| File               | Public surface                               |
+| ------------------ | -------------------------------------------- |
+| `onnx_export.py`   | `export_to_onnx()`                           |
 | `inference_trt.py` | `build_engine_from_onnx()`, `TensorRTRunner` |
-| `benchmark.py` | `benchmark_pytorch()` |
+| `benchmark.py`     | `benchmark_pytorch()`                        |
 
 `onnx_export` does three things in sequence: `torch.onnx.export`,
 `onnxsim.simplify` (if available), then a numerical parity check
@@ -248,6 +251,43 @@ required to support dynamic shapes cleanly.
 Imports `rclpy` lazily so the package remains importable on
 Windows / macOS / any environment without ROS2. The
 `_TorchBackend` provides a PyTorch fallback if TRT isn't usable.
+
+### 5.2.11 `scripts/evaluate.py` — PSNR / SSIM / UIQM / UCIQE
+
+[`scripts/evaluate.py`](../../scripts/evaluate.py)
+
+Computes **reference-based** (PSNR, SSIM via TorchMetrics) and,
+optionally, **no-reference** (UIQM, UCIQE via `pyiqa`) metrics
+against an MSRB checkpoint. Key design points:
+
+- `pyiqa` is an _optional_ import; a missing installation emits a
+  warning and skips the no-reference block rather than raising.
+- No-reference metrics are gated behind `--no-ref` so the default
+  PSNR/SSIM pass incurs no overhead.
+- Both UIQM and UCIQE scores are reported as `mean ± std` over the
+  test set, matching the statistical reporting convention in §8.10.
+
+### 5.2.12 `scripts/evaluate_slam_features.py` — Keypoint Stability
+
+[`scripts/evaluate_slam_features.py`](../../scripts/evaluate_slam_features.py)
+
+Downstream benchmark measuring whether LEGION-DeSnow improves SLAM
+feature extraction quality. For each `(I, Ĵ, J_gt)` triple:
+
+| Step               | Code                                 | Details                              |
+| ------------------ | ------------------------------------ | ------------------------------------ |
+| Tensor → uint8     | `_tensor_to_uint8`                   | CHW float→HWC uint8                  |
+| Grayscale          | `cv2.cvtColor(…, COLOR_RGB2GRAY)`    | Standard OpenCV                      |
+| Detect + describe  | `_detect(det, gray)`                 | ORB or SIFT                          |
+| Repeatability      | `_repeatability(kps_I, kps_pred, δ)` | Brute-force nearest-kp search        |
+| Match inlier ratio | `_match_inlier_ratio_and_score(…)`   | kNN + Lowe ratio + RANSAC homography |
+
+All heavy work is on CPU (OpenCV); the GPU is used only for model
+inference in the batch loop. Worker count and batch size are
+configurable; `--batch-size 1` is the default to keep per-image
+statistics clean.
+
+The four output metrics are described in detail in §8.13.
 
 ## 5.3 Configuration with Hydra
 
@@ -275,11 +315,11 @@ python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3   # multirun
 
 ### 5.3.2 Why Hydra (not argparse, not pydantic-settings)
 
-| Tool | Multi-source compose | CLI override | Multirun sweep | Adoption in ML |
-| --- | --- | --- | --- | --- |
-| argparse | no | yes | no | declining |
-| pydantic-settings | yes | partial | no | growing in web/api |
-| **Hydra** | **yes** | **yes** | **yes** | **dominant in 2026 ML research code** |
+| Tool              | Multi-source compose | CLI override | Multirun sweep | Adoption in ML                        |
+| ----------------- | -------------------- | ------------ | -------------- | ------------------------------------- |
+| argparse          | no                   | yes          | no             | declining                             |
+| pydantic-settings | yes                  | partial      | no             | growing in web/api                    |
+| **Hydra**         | **yes**              | **yes**      | **yes**        | **dominant in 2026 ML research code** |
 
 Hydra also handles run-directory creation, log routing, and
 multirun directory templates out of the box, all of which we use.
@@ -314,11 +354,11 @@ ruff-specific, annotations, pydocstyle (Google convention).
 
 A handful of rules are disabled with explicit reasons:
 
-| Disabled | Reason |
-| --- | --- |
-| D203 / D213 | Conflict with D211 / D212 we keep |
-| PLR0913 | ML configs legitimately have many parameters |
-| PLR2004 | We have many physical-constant magic numbers |
+| Disabled    | Reason                                       |
+| ----------- | -------------------------------------------- |
+| D203 / D213 | Conflict with D211 / D212 we keep            |
+| PLR0913     | ML configs legitimately have many parameters |
+| PLR2004     | We have many physical-constant magic numbers |
 
 ### 5.4.2 mypy (strict)
 
@@ -377,7 +417,7 @@ exact run directory is sufficient.
 
 Every dataset download (`aquaclr.data.download.fetch_archive`)
 verifies an MD5 checksum after the file lands on disk. A
-mismatched MD5 raises `RuntimeError`; the file is *not* cached.
+mismatched MD5 raises `RuntimeError`; the file is _not_ cached.
 
 ### 5.5.5 Tests as documentation
 
@@ -387,13 +427,13 @@ rest of the codebase can assume.
 
 ## 5.6 The pytest suite
 
-| File | Tests | Asserts |
-| --- | --- | --- |
-| `test_model.py` | 6 | shapes, [0,1] outputs, FP16 size budget, gradient finiteness, non-divisible input handling |
-| `test_physics_loss.py` | 4 | round-trip identity, gradient finiteness, t-supervision toggles, perfect-signal loss values |
-| `test_ssim_tv.py` | 4 | SSIM identity == 1, SSIM decreases with noise, TV zero on constant, TV positive on random |
-| `test_data.py` | 4 | snow synthesiser is deterministic, MSRB synth-fallback works, paired files load, missing-clean raises |
-| `test_export.py` | 4 | ONNX parity (CPU), ONNX dynamic-shape inference, PyTorch latency benchmark (gpu-marked), TRT round-trip (trt-marked) |
+| File                   | Tests | Asserts                                                                                                              |
+| ---------------------- | ----- | -------------------------------------------------------------------------------------------------------------------- |
+| `test_model.py`        | 6     | shapes, [0,1] outputs, FP16 size budget, gradient finiteness, non-divisible input handling                           |
+| `test_physics_loss.py` | 4     | round-trip identity, gradient finiteness, t-supervision toggles, perfect-signal loss values                          |
+| `test_ssim_tv.py`      | 4     | SSIM identity == 1, SSIM decreases with noise, TV zero on constant, TV positive on random                            |
+| `test_data.py`         | 4     | snow synthesiser is deterministic, MSRB synth-fallback works, paired files load, missing-clean raises                |
+| `test_export.py`       | 4     | ONNX parity (CPU), ONNX dynamic-shape inference, PyTorch latency benchmark (gpu-marked), TRT round-trip (trt-marked) |
 
 Auto-skip rules in [`tests/conftest.py`](../../tests/conftest.py):
 
@@ -403,15 +443,15 @@ Auto-skip rules in [`tests/conftest.py`](../../tests/conftest.py):
 
 ## 5.7 Performance engineering at the code level
 
-| Lever | Code site | Effect |
-| --- | --- | --- |
-| Channels-last memory format | `LEGIONDeSnowNet.__init__` | ~10–20 % speedup on Ampere convs |
-| BF16 mixed precision | trainer `precision="bf16-mixed"` | 2× memory reduction, no GradScaler needed |
-| `torch.compile(reduce-overhead)` | `LitModule.setup()` | Kernel fusion, ~10 % step speedup |
-| Persistent DataLoader workers | `DataModule._loader` | Avoids worker spin-up cost each epoch |
-| Pinned host memory | `pin_memory=True` | Faster H2D copies on CUDA |
-| Gradient accumulation | `accumulate_grad_batches=2` in train cfg | Effective batch ≥ 32 in 4 GB |
-| Gradient clipping | `gradient_clip_val=1.0` | Stabilises near `t → 0` |
+| Lever                            | Code site                                | Effect                                    |
+| -------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| Channels-last memory format      | `LEGIONDeSnowNet.__init__`               | ~10–20 % speedup on Ampere convs          |
+| BF16 mixed precision             | trainer `precision="bf16-mixed"`         | 2× memory reduction, no GradScaler needed |
+| `torch.compile(reduce-overhead)` | `LitModule.setup()`                      | Kernel fusion, ~10 % step speedup         |
+| Persistent DataLoader workers    | `DataModule._loader`                     | Avoids worker spin-up cost each epoch     |
+| Pinned host memory               | `pin_memory=True`                        | Faster H2D copies on CUDA                 |
+| Gradient accumulation            | `accumulate_grad_batches=2` in train cfg | Effective batch ≥ 32 in 4 GB              |
+| Gradient clipping                | `gradient_clip_val=1.0`                  | Stabilises near `t → 0`                   |
 
 None of these is novel; the contribution is that they are all
 applied **consistently** so the model trains in ≤ 12 hours on a
@@ -468,8 +508,8 @@ runs `python scripts/train.py data=msrb`:
     `outputs/<run>/ckpts/legion-desnow-XXX-YY.YY.ckpt`.
 
 This is the full execution trace. Everything else in the
-documentation either explains *why* a step is there (Ch. 1–4) or
-*how* to instrument it (Ch. 6–9).
+documentation either explains _why_ a step is there (Ch. 1–4) or
+_how_ to instrument it (Ch. 6–9).
 
 ---
 

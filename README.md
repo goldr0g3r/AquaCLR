@@ -40,16 +40,17 @@ $$
 I(x) \;=\; J(x)\,t(x) \;+\; B \,(1 - t(x))
 $$
 
-| Symbol | Meaning |
-| --- | --- |
-| `I(x)` | Observed (snowy) frame |
-| `J(x)` | Clean scene radiance (what we want) |
-| `t(x) ∈ [0, 1]` | Per-pixel medium transmission |
-| `B ∈ [0, 1]³` | Global ambient backscatter |
+| Symbol          | Meaning                             |
+| --------------- | ----------------------------------- |
+| `I(x)`          | Observed (snowy) frame              |
+| `J(x)`          | Clean scene radiance (what we want) |
+| `t(x) ∈ [0, 1]` | Per-pixel medium transmission       |
+| `B ∈ [0, 1]³`   | Global ambient backscatter          |
 
 Instead of regressing `J` directly, the network predicts `(t, B)` and
 inverts the equation analytically. This **physics-informed** factoring
 both:
+
 - shrinks the hypothesis space (the network can't make up colours
   that aren't compatible with underwater optics), and
 - gives downstream SLAM a free **per-pixel confidence map** in the
@@ -65,13 +66,13 @@ both:
                                                    └─► Jaffe-McGlamery inversion ──► J (B,3,H,W)
 ```
 
-| Block | Role | Params |
-| --- | --- | --- |
-| MobileNetV3-Small encoder (ImageNet-pretrained) | Multi-scale features at /4, /8, /16, /32 | ~1.5 M |
-| UNet decoder w/ depthwise-separable convs | Aggregate features back to /2 | ~2.5 M |
-| Transmission head (1×1 conv → sigmoid) | `t(x)` | < 0.1 K |
-| Backscatter head (GAP → MLP → sigmoid) | `B` (3-vector) | ~3 K |
-| **Total** | — | **~4–6 M (≤ 24 MB FP32, ≤ 12 MB FP16)** |
+| Block                                           | Role                                     | Params                                  |
+| ----------------------------------------------- | ---------------------------------------- | --------------------------------------- |
+| MobileNetV3-Small encoder (ImageNet-pretrained) | Multi-scale features at /4, /8, /16, /32 | ~1.5 M                                  |
+| UNet decoder w/ depthwise-separable convs       | Aggregate features back to /2            | ~2.5 M                                  |
+| Transmission head (1×1 conv → sigmoid)          | `t(x)`                                   | < 0.1 K                                 |
+| Backscatter head (GAP → MLP → sigmoid)          | `B` (3-vector)                           | ~3 K                                    |
+| **Total**                                       | —                                        | **~4–6 M (≤ 24 MB FP32, ≤ 12 MB FP16)** |
 
 ## Project layout
 
@@ -99,11 +100,11 @@ AquaCLR/
 We deeply analysed the underwater imaging dataset landscape and
 recommend a **two-source** training mix:
 
-| Dataset | Pairs | What we use it for | Why this one |
-| --- | --- | --- | --- |
-| **[MSRB](https://github.com/ychtanaka/marine-snow)** (Sato et al., APSIPA 2023) | 2,300 train / 400 test, 384×384 | **Primary** training signal | Purpose-built for marine-snow removal. Two tasks (small particles ≤6 px; mixed sizes ≤32 px). The only public dataset that gives perfect (snowy I, clean J) pairs for our exact problem. |
-| **[LSUI](https://lintaopeng.github.io/_pages/UIE%20Project%20Page.html)** (Peng et al., 2021) | 4,279 pairs + GT transmission maps | Auxiliary; enables direct supervision on `t(x)` | LSUI is one of the very few public underwater datasets that ships **ground-truth medium transmission maps**. This is gold for a physics-informed model. |
-| **[UIEB](https://li-chongyi.github.io/proj_benchmark.html)** (Li et al., 2019) | 890 pairs + 60 challenge | **Held-out** real-world evaluation only | Standard underwater enhancement benchmark; the 60-image *Challenge* split is unpaired and tests real-world generalisation. |
+| Dataset                                                                                       | Pairs                              | What we use it for                              | Why this one                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------- | ---------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[MSRB](https://github.com/ychtanaka/marine-snow)** (Sato et al., APSIPA 2023)               | 2,300 train / 400 test, 384×384    | **Primary** training signal                     | Purpose-built for marine-snow removal. Two tasks (small particles ≤6 px; mixed sizes ≤32 px). The only public dataset that gives perfect (snowy I, clean J) pairs for our exact problem. |
+| **[LSUI](https://lintaopeng.github.io/_pages/UIE%20Project%20Page.html)** (Peng et al., 2021) | 4,279 pairs + GT transmission maps | Auxiliary; enables direct supervision on `t(x)` | LSUI is one of the very few public underwater datasets that ships **ground-truth medium transmission maps**. This is gold for a physics-informed model.                                  |
+| **[UIEB](https://li-chongyi.github.io/proj_benchmark.html)** (Li et al., 2019)                | 890 pairs + 60 challenge           | **Held-out** real-world evaluation only         | Standard underwater enhancement benchmark; the 60-image _Challenge_ split is unpaired and tests real-world generalisation.                                                               |
 
 > **TL;DR**: train on MSRB + LSUI, evaluate on UIEB-Challenge.
 
@@ -184,21 +185,23 @@ uv run python scripts/train.py -m \
 
 ## Training
 
-| Knob | Default | Where |
-| --- | --- | --- |
-| Mixed precision | `bf16-mixed` | `configs/train/rtx3050_bf16.yaml` |
-| Optimiser | AdamW (`lr=3e-4`, `wd=1e-4`) | same |
-| Schedule | OneCycleLR (cosine) | same |
-| Batch size | 16 (MSRB) / 8 (LSUI) | `configs/data/*.yaml` |
-| EMA decay | 0.9995 | same |
-| `torch.compile` | `reduce-overhead` (auto-disabled for export) | same |
-| Channels-last | on | `configs/model/legion_desnow_s.yaml` |
-| Backbone freeze | first 2 epochs | same |
-| Loss weights | `λ_rec=1, λ_phys=0.5, λ_ssim=0.5, λ_tv=1e-2, λ_t=0.5` | same |
+| Knob            | Default                                               | Where                                |
+| --------------- | ----------------------------------------------------- | ------------------------------------ |
+| Mixed precision | `bf16-mixed`                                          | `configs/train/rtx3050_bf16.yaml`    |
+| Optimiser       | AdamW (`lr=3e-4`, `wd=1e-4`)                          | same                                 |
+| Schedule        | OneCycleLR (cosine)                                   | same                                 |
+| Batch size      | 16 (MSRB) / 8 (LSUI)                                  | `configs/data/*.yaml`                |
+| EMA decay       | 0.9995                                                | same                                 |
+| `torch.compile` | `reduce-overhead` (auto-disabled for export)          | same                                 |
+| Channels-last   | on                                                    | `configs/model/legion_desnow_s.yaml` |
+| Backbone freeze | first 2 epochs                                        | same                                 |
+| Loss weights    | `λ_rec=1, λ_phys=0.5, λ_ssim=0.5, λ_tv=1e-2, λ_t=0.5` | same                                 |
 
 Logs go to TensorBoard by default; W&B if `WANDB_API_KEY` is set.
 
 ## Evaluation
+
+### Reference-based (PSNR + SSIM)
 
 ```bash
 uv run python scripts/evaluate.py \
@@ -207,9 +210,49 @@ uv run python scripts/evaluate.py \
   --split test --task 1
 ```
 
-Reports PSNR + SSIM. For UIEB no-reference scores (UIQM, UCIQE) we
-include hooks but expect the user to install
-[`pyiqa`](https://github.com/chaofengc/IQA-PyTorch) separately.
+### No-reference (UIQM + UCIQE)
+
+Add `--no-ref` to also compute UIQM and UCIQE on the enhanced output.
+Requires [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch); silently
+skipped if not installed.
+
+```bash
+pip install pyiqa   # one-time
+uv run python scripts/evaluate.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/msrb \
+  --split test --task 1 \
+  --no-ref
+```
+
+### Downstream SLAM feature stability
+
+Measures how LEGION-DeSnow affects keypoint yield, repeatability, and
+descriptor matching quality — the metrics that directly predict SLAM
+performance. Uses OpenCV ORB (always available) or SIFT (needs
+`opencv-contrib-python`).
+
+```bash
+uv run python scripts/evaluate_slam_features.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/msrb \
+  --split test --task 1
+
+# SIFT + larger feature budget:
+uv run python scripts/evaluate_slam_features.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/msrb \
+  --detector sift --n-features 1500
+```
+
+Reports per-image and aggregate statistics for:
+
+| Metric                         | What it signals                                 |
+| ------------------------------ | ----------------------------------------------- |
+| KP count (raw / enhanced / GT) | Does de-snowing reveal more features?           |
+| Repeatability I→Ĵ              | Are scene points re-detected after enhancement? |
+| Match inlier ratio I→Ĵ         | RANSAC-verified geometric consistency           |
+| Match score                    | Descriptor confidence (lower = sharper matches) |
 
 ## Export to TensorRT
 
@@ -222,6 +265,7 @@ uv run python scripts/export_onnx.py \
 ```
 
 What this does:
+
 1. Loads the checkpoint.
 2. Exports to ONNX (opset 17, dynamic batch + `H` + `W`).
 3. Verifies ONNX vs PyTorch parity (`atol=1e-3`).
@@ -264,15 +308,15 @@ Every public class/function in this repo carries an "Automotive SiL
 parallel" docstring describing the analogous component in an
 ADAS / autonomous-driving stack. The headline mappings:
 
-| Marine context | Automotive analogue |
-| --- | --- |
-| Marine snow | Lidar rain clutter / camera rain droplets |
-| Jaffe-McGlamery `I = J·t + B(1−t)` | Koschmieder atmospheric scattering |
-| Transmission map `t(x)` | Per-ray optical depth / lidar return-intensity confidence |
-| Backscatter `B` | Airlight constant / radar noise floor |
-| TensorRT engine | DRIVE Orin engine cache |
-| ROS2 Humble | ROS2 / Apex.AI middleware in autonomy stacks |
-| LEGION-DeSnow | ADAS sensor restoration block (de-rain, de-fog) before SLAM |
+| Marine context                     | Automotive analogue                                         |
+| ---------------------------------- | ----------------------------------------------------------- |
+| Marine snow                        | Lidar rain clutter / camera rain droplets                   |
+| Jaffe-McGlamery `I = J·t + B(1−t)` | Koschmieder atmospheric scattering                          |
+| Transmission map `t(x)`            | Per-ray optical depth / lidar return-intensity confidence   |
+| Backscatter `B`                    | Airlight constant / radar noise floor                       |
+| TensorRT engine                    | DRIVE Orin engine cache                                     |
+| ROS2 Humble                        | ROS2 / Apex.AI middleware in autonomy stacks                |
+| LEGION-DeSnow                      | ADAS sensor restoration block (de-rain, de-fog) before SLAM |
 
 ## Documentation
 
@@ -290,11 +334,11 @@ bash scripts/build_dissertation.sh
 
 ## Cite & references
 
-- Sato, Y. et al. *Marine Snow Removal Benchmarking Dataset*. arXiv:2103.14249. APSIPA 2023.
-- Peng, L. et al. *U-shape Transformer for Underwater Image Enhancement*. 2021.
-- Li, C. et al. *An Underwater Image Enhancement Benchmark Dataset and Beyond*. IEEE TIP 2019.
-- Howard, A. et al. *Searching for MobileNetV3*. ICCV 2019.
-- Wang, Z. et al. *Image quality assessment: from error visibility to structural similarity (SSIM)*. IEEE TIP 2004.
-- McGlamery, B. *A computer model for underwater camera systems*. SPIE 1980.
+- Sato, Y. et al. _Marine Snow Removal Benchmarking Dataset_. arXiv:2103.14249. APSIPA 2023.
+- Peng, L. et al. _U-shape Transformer for Underwater Image Enhancement_. 2021.
+- Li, C. et al. _An Underwater Image Enhancement Benchmark Dataset and Beyond_. IEEE TIP 2019.
+- Howard, A. et al. _Searching for MobileNetV3_. ICCV 2019.
+- Wang, Z. et al. _Image quality assessment: from error visibility to structural similarity (SSIM)_. IEEE TIP 2004.
+- McGlamery, B. _A computer model for underwater camera systems_. SPIE 1980.
 
 The complete bibliography is in [`docs/dissertation/12_references.md`](docs/dissertation/12_references.md).
