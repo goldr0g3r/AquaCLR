@@ -111,6 +111,9 @@ class LEGIONDeSnowNet(nn.Module):
         use_depthwise: bool = True,
         use_channels_last: bool = True,
         eps: float = 1.0e-3,
+        gate_threshold: float = 0.1,
+        gate_temperature: float = 0.05,
+        inpaint_kernel: int = 7,
         normalize_input: bool = True,
         freeze_backbone_epochs: int = 0,
     ) -> None:
@@ -141,6 +144,9 @@ class LEGIONDeSnowNet(nn.Module):
         )
 
         self.eps = float(eps)
+        self.gate_threshold = float(gate_threshold)
+        self.gate_temperature = float(gate_temperature)
+        self.inpaint_kernel = int(inpaint_kernel)
         self.use_channels_last = bool(use_channels_last)
         self.normalize_input = bool(normalize_input)
         self.freeze_backbone_epochs = int(freeze_backbone_epochs)
@@ -186,7 +192,15 @@ class LEGIONDeSnowNet(nn.Module):
         feat_full, feat_deep = self._encode_decode(i)
         t = self.transmission_head(feat_full, target_size=(h, w))
         b = self.backscatter_head(feat_deep)
-        j = invert_jaffe_mcglamery(i, t, b, eps=self.eps)
+        j = invert_jaffe_mcglamery(
+            i,
+            t,
+            b,
+            eps=self.eps,
+            gate_threshold=self.gate_threshold,
+            gate_temperature=self.gate_temperature,
+            inpaint_kernel=self.inpaint_kernel,
+        )
         return LEGIONOutputs(j=j, t=t, b=b)
 
     def forward_export(self, i: Tensor) -> tuple[Tensor, Tensor, Tensor]:

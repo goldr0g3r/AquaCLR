@@ -14,6 +14,8 @@ Examples:
         python scripts/train.py -m train.optimizer.lr=1e-4,3e-4,1e-3
 
         wandb API: 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
+
+        Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.
 """
 
 from __future__ import annotations

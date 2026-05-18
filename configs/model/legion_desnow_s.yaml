@@ -2,11 +2,18 @@
 _target_: aquaclr.models.model.LEGIONDeSnowNet
 
 backbone: mobilenet_v3_small
-pretrained: true                 # ImageNet weights from torchvision
-out_indices: [0, 1, 2, 3]        # encoder feature stages we tap
+pretrained: true # ImageNet weights from torchvision
+out_indices: [0, 1, 2, 3] # encoder feature stages we tap
 decoder_channels: [96, 64, 32, 16]
 backscatter_hidden: 32
-use_depthwise: true              # Depthwise-separable conv for VRAM savings
-use_channels_last: true          # Speedup on Ampere+
-eps: 1.0e-3                      # transmission floor for stable physics inversion
-freeze_backbone_epochs: 2        # warmup on heads only
+use_depthwise: true # Depthwise-separable conv for VRAM savings
+use_channels_last: true # Speedup on Ampere+
+eps: 1.0e-3 # hard floor on denominator (physics branch only)
+# Gated noise suppression: soft-sigmoid blend toward spatial inpainting as t→0.
+# gate_threshold: transmission mid-point τ where g=0.5 (below → fill branch takes over)
+# gate_temperature: sigmoid steepness β (smaller = sharper transition)
+# inpaint_kernel: AvgPool neighbourhood size for the spatial fill branch (must be odd)
+gate_threshold: 0.1
+gate_temperature: 0.05
+inpaint_kernel: 7
+freeze_backbone_epochs: 2 # warmup on heads only
