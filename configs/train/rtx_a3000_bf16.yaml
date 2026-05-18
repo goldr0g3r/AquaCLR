@@ -10,11 +10,10 @@
 #   - trainer.benchmark: false -> true  (fixed input shape; cuDNN can auto-tune kernels)
 #   - trainer.log_every_n_steps: 25 -> 20 (slightly tighter logging given faster steps)
 #
-# Recommended companion CLI overrides (data side; this file only owns the train group):
-#   uv run python scripts\train.py train=rtx_a3000_bf16 \
-#       data.msrb.batch_size=16 data.msrb.num_workers=8 \
-#       data.lsui.batch_size=8  data.lsui.num_workers=8
-# (For data=combined, the keys are data.msrb.* and data.lsui.* under the combined group.)
+# Use the A3000-tuned data config (384px crops, batch=16/8) to fill the 6 GB VRAM:
+#   uv run python scripts\train.py train=rtx_a3000_bf16 data=combined_a3000
+# Fall back to the default combined.yaml (256px, batch=8/4) if you share checkpoints
+# with a 4 GB machine or need smaller crops.
 #
 # Activation reminder for fresh PowerShell sessions on this laptop:
 #   & "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\Launch-VsDevShell.ps1" `

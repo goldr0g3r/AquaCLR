@@ -1,0 +1,35 @@
+# MSRB + LSUI combined sampler — tuned for RTX A3000 Laptop (6 GB, Ampere SM 8.6).
+#
+# Differences vs combined.yaml (the RTX 3050 4 GB baseline):
+#   - image_size:  256 -> 384   (larger crops = richer features, still fits in 6 GB)
+#   - msrb.batch_size:   8 -> 16
+#   - lsui.batch_size:   4 -> 8
+#   - num_workers:       4 ->  6  (i7-11850H has 8C/16T; leave 2 threads for OS)
+#
+# Expected VRAM at these settings (BF16, no compile):
+#   ~3.5–4.5 GB during forward+backward, leaving headroom for EMA + sample logger.
+#   If you OOM, drop image_size back to 256 or reduce batch sizes by 25%.
+_target_: aquaclr.data.combined_datamodule.CombinedDataModule
+
+msrb:
+  _target_: aquaclr.data.msrb_dataset.MSRBDataModule
+  root: ${paths.data_root}/msrb
+  task: 1
+  image_size: 384
+  batch_size: 16
+  num_workers: 6
+  augment: true
+  download: false
+
+lsui:
+  _target_: aquaclr.data.lsui_dataset.LSUIDataModule
+  root: ${paths.data_root}/lsui
+  image_size: 384
+  batch_size: 8
+  num_workers: 6
+  augment: true
+  load_transmission_gt: true
+  download: false
+
+mix_ratio: [0.7, 0.3]
+val_use: msrb

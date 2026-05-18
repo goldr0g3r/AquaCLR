@@ -157,3 +157,6 @@ class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else obje
         if self.val_use == "lsui" and self._lsui_ok:
             return self.lsui.val_dataloader()
         return self.msrb.val_dataloader()
+
+    def test_dataloader(self) -> DataLoader[dict[str, Tensor]]:
+        return self.msrb.test_dataloader()
