@@ -97,7 +97,9 @@ def build_engine_from_onnx(
 
     trt_logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(trt_logger)
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    network = builder.create_network(
+        1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    )
     parser = trt.OnnxParser(network, trt_logger)
     with onnx_path.open("rb") as f:
         if not parser.parse(f.read()):
@@ -127,7 +129,11 @@ def build_engine_from_onnx(
         msg = "TensorRT engine build returned None — check the trt_logger output."
         raise RuntimeError(msg)
     engine_path.write_bytes(bytes(serialized))
-    logger.info("Wrote engine to %s (%.1f MB)", engine_path, engine_path.stat().st_size / (1 << 20))
+    logger.info(
+        "Wrote engine to %s (%.1f MB)",
+        engine_path,
+        engine_path.stat().st_size / (1 << 20),
+    )
     return engine_path
 
 
@@ -173,7 +179,9 @@ class TensorRTRunner:
             msg = f"set_input_shape({shape}) rejected by TRT context"
             raise RuntimeError(msg)
 
-    def _allocate(self, shape: tuple[int, ...], dtype: np.dtype[Any]) -> tuple[NDArray[Any], int]:
+    def _allocate(
+        self, shape: tuple[int, ...], dtype: np.dtype[Any]
+    ) -> tuple[NDArray[Any], int]:
         host = np.empty(shape, dtype=dtype)
         device_ptr = int(self._cuda.mem_alloc(host.nbytes))
         return host, device_ptr
@@ -191,36 +199,35 @@ class TensorRTRunner:
             msg = f"Expected HWC RGB uint8, got shape {i_hwc_uint8.shape}, dtype {i_hwc_uint8.dtype}"
             raise ValueError(msg)
         h, w = i_hwc_uint8.shape[:2]
-        i_chw = (
-            i_hwc_uint8.transpose(2, 0, 1).astype(np.float32, copy=False) / 255.0
-        )[None, ...].copy()
-        i_chw = np.ascontiguousarray(i_chw)
+        i_chw = np.ascontiguousarray(
+            i_hwc_uint8.transpose(2, 0, 1).astype(np.float32) / 255.0
+        ).reshape(1, 3, h, w)
 
         self._set_input_shape((1, 3, h, w))
 
-        bindings: dict[str, int] = {}
-        host_inputs: dict[str, NDArray[Any]] = {}
-        host_outputs: dict[str, NDArray[Any]] = {}
+        # Allocate device buffers — keep DeviceAllocation objects alive
+        d_input = self._cuda.mem_alloc(i_chw.nbytes)
+        self._cuda.memcpy_htod(d_input, i_chw)
 
-        in_ptr = int(self._cuda.mem_alloc(i_chw.nbytes))
-        self._cuda.memcpy_htod_async(in_ptr, i_chw, self.stream)
-        bindings[self._input_name] = in_ptr
-        host_inputs[self._input_name] = i_chw
-
+        d_outputs: dict[str, Any] = {}
+        h_outputs: dict[str, NDArray[Any]] = {}
         for name in self._output_names:
             shape = tuple(self.context.get_tensor_shape(name))
             host = np.empty(shape, dtype=np.float32)
-            dptr = int(self._cuda.mem_alloc(host.nbytes))
-            bindings[name] = dptr
-            host_outputs[name] = host
+            d_outputs[name] = self._cuda.mem_alloc(host.nbytes)
+            h_outputs[name] = host
 
-        for name, ptr in bindings.items():
-            self.context.set_tensor_address(name, ptr)
+        # Set tensor addresses (TRT needs int pointers)
+        self.context.set_tensor_address(self._input_name, int(d_input))
+        for name, d_buf in d_outputs.items():
+            self.context.set_tensor_address(name, int(d_buf))
+
         self.context.execute_async_v3(stream_handle=self.stream.handle)
-        for name, host in host_outputs.items():
-            self._cuda.memcpy_dtoh_async(host, bindings[name], self.stream)
         self.stream.synchronize()
 
-        j_chw = host_outputs["j"][0]
+        for name, host in h_outputs.items():
+            self._cuda.memcpy_dtoh(host, d_outputs[name])
+
+        j_chw = h_outputs["j"][0]
         j_hwc = np.clip(j_chw.transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
         return j_hwc
