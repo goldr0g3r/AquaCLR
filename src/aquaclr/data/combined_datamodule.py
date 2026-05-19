@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover
 
 from aquaclr.data.lsui_dataset import LSUIDataModule
 from aquaclr.data.msrb_dataset import MSRBDataModule
+from aquaclr.data.uieb_dataset import UIEBDataModule
 
 
 class _AlternatingLoader:
@@ -81,14 +82,16 @@ class _AlternatingLoader:
 
 
 class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else object):  # type: ignore[misc]
-    """Mix MSRB and LSUI per-batch with configurable probabilities.
+    """Mix MSRB, LSUI, and optionally UIEB per-batch with configurable probabilities.
 
     Args:
         msrb: An MSRB DataModule **or** an instance config dict.
         lsui: An LSUI DataModule **or** an instance config dict.
-        mix_ratio: ``(p_msrb, p_lsui)``. Normalised internally.
+        uieb: An optional UIEB DataModule **or** an instance config dict.
+        mix_ratio: ``(p_msrb, p_lsui)`` or ``(p_msrb, p_lsui, p_uieb)``.
+            Normalised internally.
         val_use: Which sub-DataModule's val split is reported as the
-            primary metric: ``"msrb"`` or ``"lsui"``.
+            primary metric: ``"msrb"``, ``"lsui"``, or ``"uieb"``.
     """
 
     def __init__(
@@ -96,16 +99,18 @@ class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else obje
         msrb: MSRBDataModule | dict[str, Any] | str | Path,
         lsui: LSUIDataModule | dict[str, Any] | str | Path,
         *,
-        mix_ratio: tuple[float, float] = (0.7, 0.3),
+        uieb: UIEBDataModule | dict[str, Any] | str | Path | None = None,
+        mix_ratio: tuple[float, ...] = (0.7, 0.3),
         val_use: str = "msrb",
     ) -> None:
         if _LIGHTNING_AVAILABLE:
             super().__init__()
         self.msrb = self._coerce_msrb(msrb)
         self.lsui = self._coerce_lsui(lsui)
-        self.mix_ratio = (float(mix_ratio[0]), float(mix_ratio[1]))
-        if val_use not in {"msrb", "lsui"}:
-            msg = f"val_use must be 'msrb' or 'lsui', got {val_use!r}"
+        self.uieb = self._coerce_uieb(uieb) if uieb is not None else None
+        self.mix_ratio = tuple(float(x) for x in mix_ratio)
+        if val_use not in {"msrb", "lsui", "uieb"}:
+            msg = f"val_use must be 'msrb', 'lsui', or 'uieb', got {val_use!r}"
             raise ValueError(msg)
         self.val_use = val_use
 
@@ -127,13 +132,26 @@ class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else obje
             return LSUIDataModule(**kwargs)
         return LSUIDataModule(root=x)
 
+    @staticmethod
+    def _coerce_uieb(x: UIEBDataModule | dict[str, Any] | str | Path) -> UIEBDataModule:
+        if isinstance(x, UIEBDataModule):
+            return x
+        if isinstance(x, dict):
+            kwargs = {k: v for k, v in x.items() if k != "_target_"}
+            return UIEBDataModule(**kwargs)
+        return UIEBDataModule(root=x)
+
     def prepare_data(self) -> None:
         self.msrb.prepare_data()
         try:
             self.lsui.prepare_data()
         except (FileNotFoundError, NotImplementedError):
-            # LSUI is optional; the combined module still works on MSRB alone.
             pass
+        if self.uieb is not None:
+            try:
+                self.uieb.prepare_data()
+            except (FileNotFoundError, NotImplementedError):
+                pass
 
     def setup(self, stage: str | None = None) -> None:
         self.msrb.setup(stage)
@@ -142,13 +160,23 @@ class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else obje
             self._lsui_ok = True
         except FileNotFoundError:
             self._lsui_ok = False
+        self._uieb_ok = False
+        if self.uieb is not None:
+            try:
+                self.uieb.setup(stage)
+                self._uieb_ok = True
+            except FileNotFoundError:
+                self._uieb_ok = False
 
     def train_dataloader(self) -> Any:
         loaders = [self.msrb.train_dataloader()]
         probs = [self.mix_ratio[0]]
         if self._lsui_ok:
             loaders.append(self.lsui.train_dataloader())
-            probs.append(self.mix_ratio[1])
+            probs.append(self.mix_ratio[1] if len(self.mix_ratio) > 1 else 0.0)
+        if self._uieb_ok and self.uieb is not None:
+            loaders.append(self.uieb.train_dataloader())
+            probs.append(self.mix_ratio[2] if len(self.mix_ratio) > 2 else 0.0)
         if len(loaders) == 1:
             return loaders[0]
         return _AlternatingLoader(loaders, probs)
@@ -156,6 +184,8 @@ class CombinedDataModule(L.LightningDataModule if _LIGHTNING_AVAILABLE else obje
     def val_dataloader(self) -> DataLoader[dict[str, Tensor]]:
         if self.val_use == "lsui" and self._lsui_ok:
             return self.lsui.val_dataloader()
+        if self.val_use == "uieb" and self._uieb_ok and self.uieb is not None:
+            return self.uieb.val_dataloader()
         return self.msrb.val_dataloader()
 
     def test_dataloader(self) -> DataLoader[dict[str, Tensor]]:

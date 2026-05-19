@@ -7,6 +7,7 @@ from aquaclr.data.lsui_dataset import LSUIDataModule, LSUIDataset
 from aquaclr.data.msrb_dataset import MSRBDataModule, MSRBDataset
 from aquaclr.data.snow_synthesis import synthesize_marine_snow
 from aquaclr.data.transforms import build_train_transform, build_val_transform
+from aquaclr.data.uieb_dataset import UIEBDataModule, UIEBDataset
 
 __all__ = [
     "CombinedDataModule",
@@ -14,6 +15,8 @@ __all__ = [
     "LSUIDataset",
     "MSRBDataModule",
     "MSRBDataset",
+    "UIEBDataModule",
+    "UIEBDataset",
     "build_train_transform",
     "build_val_transform",
     "synthesize_marine_snow",

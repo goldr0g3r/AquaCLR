@@ -1,8 +1,8 @@
-"""Evaluate a trained checkpoint on UIEB-Challenge or MSRB-test.
+"""Evaluate a trained checkpoint on MSRB-test, UIEB, or LSUI.
 
-Reports PSNR, SSIM, and (best-effort) UIQM/UCIQE no-reference metrics.
+Reports PSNR, SSIM, and (best-effort) no-reference metrics.
 
-UIQM / UCIQE require the optional ``pyiqa`` package::
+No-reference metrics require the optional ``pyiqa`` package::
 
     pip install pyiqa
 
@@ -23,8 +23,10 @@ from torchmetrics.image import (
     StructuralSimilarityIndexMeasure,
 )
 
+from aquaclr.data.lsui_dataset import LSUIDataset
 from aquaclr.data.msrb_dataset import MSRBDataset, _collate
 from aquaclr.data.transforms import build_val_transform
+from aquaclr.data.uieb_dataset import UIEBDataset
 from aquaclr.models import LEGIONDeSnowNet
 
 # ---------------------------------------------------------------------------
@@ -45,6 +47,12 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ckpt", type=Path, required=True)
     p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument(
+        "--dataset",
+        default="msrb",
+        choices=["msrb", "uieb", "lsui"],
+        help="Which dataset format to load (default: msrb).",
+    )
     p.add_argument("--split", default="test", choices=["train", "test"])
     p.add_argument("--task", type=int, default=1, choices=[1, 2])
     p.add_argument("--image-size", type=int, default=384)
@@ -55,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
         "--no-ref",
         action="store_true",
         default=False,
-        help="Compute UIQM / UCIQE no-reference metrics (requires pyiqa). "
+        help="Compute no-reference metrics (requires pyiqa). "
         "Applied to the enhanced output Ĵ only — no GT needed.",
     )
     return p.parse_args()
@@ -79,13 +87,29 @@ def main() -> None:
         )
         run_no_ref = False
 
-    uiqm_scores: list[float] = []
-    uciqe_scores: list[float] = []
+    nref_scores: dict[str, list[float]] = {}
+    nref_metrics: dict[str, object] = {}
 
     if run_no_ref:
-        logger.info("pyiqa found — will compute UIQM / UCIQE on enhanced output Ĵ")
-        _uiqm_metric = pyiqa.create_metric("uiqm", device=args.device)
-        _uciqe_metric = pyiqa.create_metric("uciqe", device=args.device)
+        # Try UIQM/UCIQE first; fall back to NIQE/MUSIQ if unavailable.
+        _metric_candidates = [
+            ("uiqm", True),
+            ("uciqe", True),
+            ("niqe", False),
+            ("musiq", True),
+        ]
+        for mname, higher_better in _metric_candidates:
+            try:
+                nref_metrics[mname] = pyiqa.create_metric(mname, device=args.device)
+                nref_scores[mname] = []
+                logger.info("pyiqa: loaded no-reference metric '%s'", mname)
+            except (AssertionError, KeyError, ValueError):
+                logger.warning("pyiqa: metric '%s' not available — skipping", mname)
+        if not nref_metrics:
+            logger.warning(
+                "No no-reference metrics could be loaded — disabling --no-ref"
+            )
+            run_no_ref = False
 
     # ------------------------------------------------------------------
     # Load checkpoint
@@ -110,12 +134,22 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Dataset / DataLoader
     # ------------------------------------------------------------------
-    ds = MSRBDataset(
-        args.data_root,
-        split=args.split,
-        task=args.task,
-        transform=build_val_transform(args.image_size),
-    )
+    transform = build_val_transform(args.image_size)
+    if args.dataset == "msrb":
+        ds = MSRBDataset(
+            args.data_root,
+            split=args.split,
+            task=args.task,
+            transform=transform,
+        )
+    elif args.dataset == "uieb":
+        ds = UIEBDataset(args.data_root, transform=transform)
+    elif args.dataset == "lsui":
+        ds = LSUIDataset(args.data_root, transform=transform)
+    else:
+        raise ValueError(f"Unknown dataset: {args.dataset}")
+
+    logger.info("Dataset: %s (%d samples)", args.dataset.upper(), len(ds))
     loader: DataLoader[dict[str, torch.Tensor]] = DataLoader(
         ds,
         batch_size=args.batch_size,
@@ -149,10 +183,9 @@ def main() -> None:
             # ----------------------------------------------------------
             if run_no_ref:
                 # pyiqa expects (B, C, H, W) float32 in [0, 1]
-                scores_uiqm: torch.Tensor = _uiqm_metric(j_pred).cpu()
-                scores_uciqe: torch.Tensor = _uciqe_metric(j_pred).cpu()
-                uiqm_scores.extend(scores_uiqm.tolist())
-                uciqe_scores.extend(scores_uciqe.tolist())
+                for mname, metric_fn in nref_metrics.items():
+                    scores: torch.Tensor = metric_fn(j_pred).cpu().flatten()
+                    nref_scores[mname].extend(scores.tolist())
 
     # ------------------------------------------------------------------
     # Report
@@ -160,24 +193,20 @@ def main() -> None:
     logger.info("PSNR: %.3f dB", psnr.compute().item())
     logger.info("SSIM: %.4f", ssim.compute().item())
 
-    if run_no_ref and uiqm_scores:
-        n = len(uiqm_scores)
-        uiqm_mean = statistics.mean(uiqm_scores)
-        uciqe_mean = statistics.mean(uciqe_scores)
-        uiqm_sd = statistics.stdev(uiqm_scores) if n > 1 else 0.0
-        uciqe_sd = statistics.stdev(uciqe_scores) if n > 1 else 0.0
-        logger.info(
-            "UIQM : %.4f ± %.4f  (n=%d)  [no-reference, higher is better]",
-            uiqm_mean,
-            uiqm_sd,
-            n,
-        )
-        logger.info(
-            "UCIQE: %.4f ± %.4f  (n=%d)  [no-reference, higher is better]",
-            uciqe_mean,
-            uciqe_sd,
-            n,
-        )
+    if run_no_ref and nref_scores:
+        for mname, scores_list in nref_scores.items():
+            n = len(scores_list)
+            if n == 0:
+                continue
+            m = statistics.mean(scores_list)
+            sd = statistics.stdev(scores_list) if n > 1 else 0.0
+            logger.info(
+                "%s: %.4f ± %.4f  (n=%d)  [no-reference]",
+                mname.upper(),
+                m,
+                sd,
+                n,
+            )
 
 
 if __name__ == "__main__":
