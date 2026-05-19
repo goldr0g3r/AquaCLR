@@ -2,8 +2,11 @@
 
 Examples::
 
-    # Webcam
+    # Webcam (PyTorch)
     uv run python scripts/infer_camera.py --ckpt outputs/20260518-143022/ckpts/best.ckpt
+
+    # Webcam (TensorRT engine)
+    uv run python scripts/infer_camera.py --engine outputs/legion_desnow.engine
 
     # Video file
     uv run python scripts/infer_camera.py --ckpt best.ckpt --source path/to/video.mp4
@@ -64,9 +67,23 @@ class _InferenceBackend:
         return cv2.cvtColor((j * 255).clip(0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
 
 
+class _TensorRTBackend:
+    def __init__(self, engine_path: Path) -> None:
+        from aquaclr.inference.inference_trt import TensorRTRunner
+
+        logger.info("Loading TensorRT engine: %s", engine_path)
+        self._runner = TensorRTRunner(engine_path)
+
+    def __call__(self, frame_bgr: np.ndarray) -> np.ndarray:
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        clean_rgb = self._runner(rgb)
+        return cv2.cvtColor(clean_rgb, cv2.COLOR_RGB2BGR)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument("--engine", type=Path, default=None, help="TensorRT .engine file (overrides --ckpt)")
     parser.add_argument("--source", default="0", help="Camera index or video file path")
     parser.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
@@ -82,7 +99,10 @@ def main() -> None:
     parser.add_argument("--no-display", action="store_true")
     args = parser.parse_args()
 
-    backend = _InferenceBackend(args.ckpt, args.device, half=not args.no_half)
+    if args.engine is not None:
+        backend = _TensorRTBackend(args.engine)
+    else:
+        backend = _InferenceBackend(args.ckpt, args.device, half=not args.no_half)
 
     src: int | str = int(args.source) if args.source.isdigit() else args.source
     cap = cv2.VideoCapture(src)

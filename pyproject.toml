@@ -53,6 +53,7 @@ dependencies = [
     "onnx>=1.21.0",
     "pyiqa>=0.1.15.post2",
     "tensorrt>=10.16.1.11",
+    "pycuda>=2026.1",
 ]
 
 [project.optional-dependencies]
