@@ -236,6 +236,7 @@ dependencies = [
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "onnx" },
+    { name = "onnx-simplifier" },
     { name = "onnxruntime-gpu", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "onnxruntime-gpu", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opencv-python-headless" },
@@ -295,6 +296,7 @@ requires-dist = [
     { name = "omegaconf", specifier = ">=2.3" },
     { name = "onnx", specifier = ">=1.21.0" },
     { name = "onnx", marker = "extra == 'trt'", specifier = ">=1.16" },
+    { name = "onnx-simplifier", specifier = ">=0.5.0" },
     { name = "onnxruntime", marker = "sys_platform == 'darwin' and extra == 'trt'", specifier = ">=1.18" },
     { name = "onnxruntime-gpu", specifier = ">=1.24.3" },
     { name = "onnxruntime-gpu", marker = "sys_platform != 'darwin' and extra == 'trt'", specifier = ">=1.18" },
@@ -2291,6 +2293,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9c/a6/5eefbe5b40ea96de95a766bd2e0e751f35bdea2d4b951991ec9afaa69531/onnx-1.21.0-cp312-abi3-win_amd64.whl", hash = "sha256:458d91948ad9a7729a347550553b49ab6939f9af2cddf334e2116e45467dc61f", size = 16441045, upload-time = "2026-03-27T21:33:00.081Z" },
     { url = "https://files.pythonhosted.org/packages/63/c4/0ed8dc037a39113d2a4d66e0005e07751c299c46b993f1ad5c2c35664c20/onnx-1.21.0-cp312-abi3-win_arm64.whl", hash = "sha256:ca14bc4842fccc3187eb538f07eabeb25a779b39388b006db4356c07403a7bbb", size = 16403134, upload-time = "2026-03-27T21:33:03.987Z" },
 ]
+
+[[package]]
+name = "onnx-simplifier"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "onnxsim" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/93/37/229570fd8ca86aca41ec893525950de95a33891521d63da3517162545dc8/onnx_simplifier-0.5.0.tar.gz", hash = "sha256:6f15c75a68161a618d5e2ef9fd5e9417fe296b13dd71560406b510fbf027825f", size = 728, upload-time = "2026-02-21T10:35:22Z" }
 
 [[package]]
 name = "onnxruntime"

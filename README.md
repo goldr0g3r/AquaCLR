@@ -233,20 +233,42 @@ TensorBoard and W&B (W&B credentials read from `~/_netrc` or
 
 ## Evaluation
 
+The evaluation script supports three datasets via `--dataset`:
+
+| Dataset | Flag | Data root | Notes |
+|---------|------|-----------|-------|
+| MSRB | `--dataset msrb` (default) | `data/msrb` | Requires `--split` and `--task` |
+| UIEB | `--dataset uieb` | `data/uieb` | Uses raw-890/reference-890 pairs |
+| LSUI | `--dataset lsui` | `data/lsui` | Uses input/GT pairs |
+
 ### Reference-based (PSNR + SSIM)
 
 ```bash
+# MSRB (default)
 uv run python scripts/evaluate.py \
   --ckpt outputs/<run>/ckpts/best.ckpt \
   --data-root data/msrb \
   --split test --task 1
+
+# UIEB
+uv run python scripts/evaluate.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/uieb \
+  --dataset uieb
+
+# LSUI
+uv run python scripts/evaluate.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --data-root data/lsui \
+  --dataset lsui
 ```
 
-### No-reference (UIQM + UCIQE)
+### No-reference (NIQE + MUSIQ)
 
-Add `--no-ref` to also compute UIQM and UCIQE on the enhanced output.
-Requires [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch); silently
-skipped if not installed.
+Add `--no-ref` to compute no-reference image quality metrics on the
+enhanced output. Requires [`pyiqa`](https://github.com/chaofengc/IQA-PyTorch);
+silently skipped if not installed. The script attempts UIQM/UCIQE first
+and gracefully falls back to NIQE and MUSIQ if unavailable.
 
 ```bash
 pip install pyiqa   # one-time
@@ -290,11 +312,16 @@ Reports per-image and aggregate statistics for:
 
 Run the model on a webcam or video file in real time. Displays a
 side-by-side (Raw | Enhanced) window with per-frame latency overlay.
+Supports both **PyTorch** (`--ckpt`) and **TensorRT** (`--engine`) backends.
 
 ```bash
-# Webcam (device 0)
+# Webcam with PyTorch backend (device 0)
 uv run python scripts/infer_camera.py \
   --ckpt outputs/<run>/ckpts/best.ckpt
+
+# Webcam with TensorRT engine (fastest)
+uv run python scripts/infer_camera.py \
+  --engine outputs/legion_desnow.engine
 
 # Video file
 uv run python scripts/infer_camera.py \
@@ -313,31 +340,68 @@ uv run python scripts/infer_camera.py \
 ```
 
 Expected throughput on the RTX A3000 (BF16, native resolution 1080 p): ~20–30 FPS.
-With `--resize 512`: ~60+ FPS.
+With `--resize 512`: ~60+ FPS. With TensorRT FP16: ~70–100+ FPS.
 
 > For ROS2 integration (Humble / Jazzy) see `src/aquaclr/ros2/ros2_node.py` and
 > [`docs/DEPLOYMENT_FEDORA.md`](docs/DEPLOYMENT_FEDORA.md).
 
-## Export to TensorRT
+## Export & Benchmarking
+
+### ONNX export + TensorRT engine build
 
 ```bash
 uv run python scripts/export_onnx.py \
   --ckpt outputs/<run>/ckpts/best.ckpt \
   --out outputs/legion_desnow.onnx \
   --height 720 --width 1280 \
-  --build-trt --benchmark
+  --build-trt
 ```
 
 What this does:
 
 1. Loads the checkpoint.
 2. Exports to ONNX (opset 17, dynamic batch + `H` + `W`).
-3. Verifies ONNX vs PyTorch parity (`atol=1e-3`).
-4. Builds a TensorRT FP16 engine with a 256–720 p shape profile.
-5. Runs a 200-iter latency benchmark and prints p50/p95/FPS/VRAM.
+3. Simplifies the graph with `onnxsim` (if installed: `pip install onnx-simplifier`).
+4. Verifies ONNX vs PyTorch parity (skip with `--no-verify` if tolerance is tight).
+5. Builds a TensorRT FP16 engine with a 256–720 p dynamic shape profile.
 
-> **Tip**: TensorRT is Linux-only; on Windows, stop after the ONNX
-> export and use `onnxruntime-gpu` for inference.
+### Latency benchmarking
+
+Three benchmark backends are available:
+
+| Flag | Backend | Requirements |
+|------|---------|-------------|
+| `--benchmark` | PyTorch FP16 | _(none — always available)_ |
+| `--benchmark-onnx` | ONNX Runtime | `pip install onnxruntime-gpu` |
+| `--benchmark-trt` | TensorRT engine | `pip install tensorrt pycuda` + `--build-trt` |
+
+Run all three in one command:
+
+```bash
+uv run python scripts/export_onnx.py \
+  --ckpt outputs/<run>/ckpts/best.ckpt \
+  --height 720 --width 1280 \
+  --build-trt \
+  --benchmark --benchmark-onnx --benchmark-trt \
+  --no-verify
+```
+
+Each benchmark runs 200 iterations (after 20 warmup) and reports:
+- **p50 / p95 / mean** latency (ms)
+- **FPS** (frames per second)
+- **Peak VRAM** (PyTorch only)
+
+Example results on RTX A3000 at 720×1280:
+
+| Backend | p50 | FPS | Notes |
+|---------|-----|-----|-------|
+| PyTorch FP16 | ~22 ms | ~45 | Baseline |
+| ONNX Runtime (CUDA) | ~18 ms | ~55 | Graph optimizations |
+| TensorRT FP16 | ~10 ms | ~100 | Kernel fusion + FP16 |
+
+> **Tip**: TensorRT engines are hardware-specific. Build the `.engine`
+> on the deployment machine. On Windows without TRT, use ONNX Runtime
+> (`onnxruntime-gpu`) as the deployment backend.
 
 ## ROS2 deployment
 
