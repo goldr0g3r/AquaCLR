@@ -45,6 +45,7 @@ Thumbs.db
 # Use the "ignore contents, keep directory" idiom for /data/ so .gitkeep tracks.
 /data/*
 !/data/.gitkeep
+!/outputs/models/
 /outputs/
 /logs/
 /checkpoints/
