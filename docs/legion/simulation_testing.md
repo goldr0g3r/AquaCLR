@@ -2,7 +2,7 @@
 
 Because underwater hardware deployments are expensive and carry a high risk of vehicle loss, the LEGION swarm must be validated through rigorous software and hardware in-the-loop testing before touching the water.
 
-See [README.md](file:///c:/Code/AquaCLR/docs/legion/README.md) for the documentation index.
+See [README.md](README.md) for the documentation index.
 
 ## 1. Simulators (The "Loop" Environments)
 

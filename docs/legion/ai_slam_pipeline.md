@@ -2,7 +2,7 @@
 
 The intelligence of the LEGION swarm relies on fusing multiple imperfect underwater sensors. Vision is short-range but high-resolution; sonar is long-range but low-resolution.
 
-See [README.md](file:///c:/Code/AquaCLR/docs/legion/README.md) for the documentation index.
+See [README.md](README.md) for the documentation index.
 
 ## 1. The Perception Pipeline
 

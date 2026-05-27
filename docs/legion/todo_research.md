@@ -2,7 +2,7 @@
 
 This document outlines the required research, immediate development backlog, and key frameworks to study to bring the LEGION swarm to reality.
 
-See [README.md](file:///c:/Code/AquaCLR/docs/legion/README.md) for the documentation index.
+See [README.md](README.md) for the documentation index.
 
 ## 1. Things to Learn (Frameworks & Tools)
 

@@ -2,7 +2,7 @@
 
 This document details the network, hardware, and ROS 2 middleware architecture required to deploy the LEGION Mother-Daughter swarm.
 
-See [README.md](file:///c:/Code/AquaCLR/docs/legion/README.md) for the documentation index.
+See [README.md](README.md) for the documentation index.
 
 ## 1. The Mother-Daughter Topology
 

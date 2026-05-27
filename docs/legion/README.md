@@ -6,13 +6,19 @@ Welcome to the documentation for the **LEGION** (Large-scale Exploration via Gro
 
 This documentation suite is broken down into modular, cross-linked files to make studying and implementation easier.
 
-- 📖 **[Architecture & Systems Design](file:///c:/Code/AquaCLR/docs/legion/architecture.md)**
+- 📖 **[Architecture & Systems Design](architecture.md)**
   Details the ROS 2 integration, Mother-Daughter topology, acoustic middleware, and node graphs.
-- 🧪 **[Simulation & Testing (SIL/HIL/PIL)](file:///c:/Code/AquaCLR/docs/legion/simulation_testing.md)**
+- 🔌 **[ROS 2 Node Implementation Reference](ros2_nodes_detailed.md)**
+  Full topic schemas, QoS profiles, code skeletons, thruster allocation matrix, and GTSAM integration for every node.
+- 📡 **[Communications Protocol Specification](comms_protocol.md)**
+  Acoustic/optical link constraints, binary message byte layouts, DESERT integration, ARQ strategy, and clock sync.
+- 🔺 **[Formation Control Mathematics](formation_control.md)**
+  Virtual structure, consensus protocol, artificial potential fields, and underwater-specific challenges.
+- 🧪 **[Simulation & Testing (SIL/HIL/PIL)](simulation_testing.md)**
   Covers the validation pipeline using Gazebo Harmonic, Stonefish, DAVE, and MATLAB/Simulink hydrodynamics.
-- 🧠 **[AI, Perception & SLAM](file:///c:/Code/AquaCLR/docs/legion/ai_slam_pipeline.md)**
+- 🧠 **[AI, Perception & SLAM](ai_slam_pipeline.md)**
   Deep dive into the neural network pipelines, sonar/optical sensor fusion, and multi-agent SLAM.
-- 📋 **[Research, TODOs & Learning Path](file:///c:/Code/AquaCLR/docs/legion/todo_research.md)**
+- 📋 **[Research, TODOs & Learning Path](todo_research.md)**
   A curated guide of academic papers, frameworks to learn, and the immediate development backlog.
 
 ## High-Level Concept
